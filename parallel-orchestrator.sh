@@ -26,14 +26,13 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# ── 1. Watchdog: auto-redispatch stuck tasks ─────────────
+# ── 1. Watchdog: auto-redispatch + health check ─────────
 echo "[parallel] Running watchdog..." >&2
-python3 watchdog.py auto-redispatch 2>&1 | while read -r line; do
-  echo "[watchdog] $line" >&2
-done
+python3 watchdog.py auto-redispatch >&2 || true
+
 WATCHDOG_ISSUES=$(python3 watchdog.py check 2>&1) || true
 if [ -n "$WATCHDOG_ISSUES" ] && [ "$WATCHDOG_ISSUES" != "No issues detected." ]; then
-  echo "[watchdog] $WATCHDOG_ISSUES" >&2
+  echo "[parallel] Watchdog: $WATCHDOG_ISSUES" >&2
   bash "$SCRIPT_DIR/notify.sh" "$WATCHDOG_ISSUES" || true
 fi
 
@@ -41,8 +40,8 @@ fi
 STATE=$(sqlite3 "$DB_PATH" "SELECT value FROM control WHERE key='global_state';")
 
 case "$STATE" in
-  stopped)
-    echo "[parallel] State is 'stopped'. Exiting." >&2
+  stopped|stopping)
+    echo "[parallel] State is '$STATE'. Exiting." >&2
     exit 0
     ;;
   paused)
@@ -80,7 +79,6 @@ for TASK_ID in $TASK_IDS; do
   # Ensure worktree exists
   if [ ! -d "$WORKTREE" ]; then
     echo "[parallel] WARNING: Worktree $WORKTREE missing. Run setup-worktrees.sh first." >&2
-    echo "[parallel] Falling back to main directory for worker $WORKER_IDX." >&2
   fi
 
   echo "[parallel] Worker $WORKER_IDX -> task $TASK_ID" >&2
@@ -128,9 +126,8 @@ done
 echo "[parallel] All workers done. Failures: $FAILURES/$TASK_COUNT" >&2
 
 # ── 6. Merge results ────────────────────────────────────
-python3 merge-results.py 2>&1 | while read -r line; do
-  echo "[merge] $line" >&2
-done || true
+echo "[parallel] Running merge-results..." >&2
+python3 merge-results.py >&2 || true
 
 # ── 7. Notify ────────────────────────────────────────────
 if [ "$FAILURES" -eq 0 ]; then

@@ -327,6 +327,170 @@ def cmd_retry(args):
     conn.close()
 
 
+# ── plan ─────────────────────────────────────────────────────────────
+
+def cmd_plan(args):
+    """Use Claude to auto-decompose a goal into a task DAG."""
+    import subprocess
+    import tempfile
+
+    project = args.project
+    goal = args.goal
+    project_dir = args.project_dir
+    tasks_dir = HARNESS_ROOT / "tasks" / project
+
+    # Scan project if project_dir provided
+    project_context = ""
+    if project_dir:
+        project_path = Path(project_dir).resolve()
+        if project_path.is_dir():
+            # Get file listing
+            try:
+                result = subprocess.run(
+                    ["find", str(project_path), "-type", "f",
+                     "-not", "-path", "*/.git/*",
+                     "-not", "-path", "*/node_modules/*",
+                     "-not", "-path", "*/__pycache__/*",
+                     "-not", "-path", "*/venv/*",
+                     "-not", "-path", "*/.venv/*"],
+                    capture_output=True, text=True, timeout=10
+                )
+                files = result.stdout.strip()
+                project_context = f"\n目標專案目錄: {project_path}\n檔案結構:\n{files}\n"
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                project_context = f"\n目標專案目錄: {project_path}\n"
+
+    prompt = f"""你是一個任務規劃器。根據以下目標，拆解成一個任務 DAG。
+
+目標: {goal}
+專案名: {project}
+{project_context}
+
+每個任務必須是一個 JSON 物件，格式：
+{{
+  "id": "unique-id",
+  "project": "{project}",
+  "goal": "具體描述，讓另一個 Claude agent 知道要做什麼",
+  "touches": ["file1.py"],
+  "verify": "客觀驗證指令",
+  "depends_on": ["前置任務 id"],
+  "max_attempts": 5
+}}
+
+規則：
+- 每個任務要可獨立驗證
+- verify 必須是客觀指令（test/build/lint/grep），不能是 echo
+- touches 列出會修改的檔案
+- depends_on 形成 DAG
+- goal 要包含完整 context（工作目錄、具體要求）
+
+只輸出一個 JSON array，包含所有任務，不要加任何其他文字：
+[{{"id": "...", ...}}, ...]"""
+
+    print(f"🧠 使用 Claude 拆解任務: {goal}", file=sys.stderr)
+    print(f"📁 專案: {project}", file=sys.stderr)
+
+    try:
+        result = subprocess.run(
+            ["claude", "--bare", "-p", prompt,
+             "--allowedTools", "Read,Bash",
+             "--output-format", "text"],
+            capture_output=True, text=True, timeout=300,
+            cwd=str(project_path) if project_dir and Path(project_dir).is_dir() else None
+        )
+    except FileNotFoundError:
+        print("Error: 'claude' CLI not found. Make sure Claude Code is installed.", file=sys.stderr)
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print("Error: Claude timed out (5 min limit).", file=sys.stderr)
+        sys.exit(1)
+
+    if result.returncode != 0:
+        print(f"Error: Claude exited with code {result.returncode}", file=sys.stderr)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        sys.exit(1)
+
+    output = result.stdout.strip()
+
+    # Extract JSON array from output (Claude might wrap it in markdown)
+    json_str = output
+    if "```" in output:
+        # Extract from code block
+        lines = output.split("\n")
+        in_block = False
+        json_lines = []
+        for line in lines:
+            if line.strip().startswith("```"):
+                if in_block:
+                    break
+                in_block = True
+                continue
+            if in_block:
+                json_lines.append(line)
+        if json_lines:
+            json_str = "\n".join(json_lines)
+
+    # Find the JSON array boundaries
+    start = json_str.find("[")
+    end = json_str.rfind("]")
+    if start != -1 and end != -1:
+        json_str = json_str[start:end + 1]
+
+    try:
+        tasks = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        print(f"Error: failed to parse Claude output as JSON: {e}", file=sys.stderr)
+        print("Raw output:", file=sys.stderr)
+        print(output[:2000], file=sys.stderr)
+        sys.exit(1)
+
+    if not isinstance(tasks, list) or not tasks:
+        print("Error: expected a non-empty JSON array of tasks.", file=sys.stderr)
+        sys.exit(1)
+
+    # Display the DAG
+    print(f"\n📋 任務 DAG: {project} ({len(tasks)} 個任務)\n")
+    for t in tasks:
+        deps = t.get("depends_on", [])
+        dep_str = f" (等 {', '.join(deps)})" if deps else " (無依賴)"
+        print(f"  {'⏳'} {t['id']}{dep_str}")
+        goal_short = t["goal"][:80] + "..." if len(t["goal"]) > 80 else t["goal"]
+        print(f"     {goal_short}")
+        print(f"     verify: {t.get('verify', 'N/A')}")
+        print()
+
+    if args.dry_run:
+        print("(dry-run mode — 不寫入檔案)")
+        return
+
+    # Write task files
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    for t in tasks:
+        task_file = tasks_dir / f"{t['id']}.json"
+        with open(task_file, "w", encoding="utf-8") as f:
+            json.dump(t, f, indent=2, ensure_ascii=False)
+        print(f"✅ 寫入 {task_file}")
+
+    # Import
+    try:
+        from task_picker import import_tasks
+        count = import_tasks(str(tasks_dir))
+        print(f"\n📥 匯入 {count} 個任務到資料庫")
+    except Exception:
+        # Fallback to CLI
+        result = subprocess.run(
+            ["python3", str(HARNESS_ROOT / "task_picker.py"), "import", str(tasks_dir)],
+            capture_output=True, text=True
+        )
+        print(result.stdout)
+
+    print(f"\n✅ 完成！使用以下指令啟動：")
+    print(f"   cd {HARNESS_ROOT}")
+    print(f"   bash orchestrator.sh        # 單輪")
+    print(f"   bash parallel-orchestrator.sh  # 並行")
+
+
 # ── main ─────────────────────────────────────────────────────────────
 
 def main():
@@ -364,6 +528,15 @@ def main():
     p_retry = sub.add_parser("retry", help="Reset and retry a task")
     p_retry.add_argument("task_id", help="Task ID to retry")
 
+    # plan
+    p_plan = sub.add_parser("plan", help="Auto-decompose a goal into task DAG using Claude")
+    p_plan.add_argument("goal", help="Natural language description of what to build")
+    p_plan.add_argument("--project", "-p", required=True, help="Project name")
+    p_plan.add_argument("--dir", "-d", dest="project_dir", default=None,
+                        help="Target project directory to scan for context")
+    p_plan.add_argument("--dry-run", action="store_true",
+                        help="Only show the plan, don't write files")
+
     args = parser.parse_args()
 
     dispatch = {
@@ -376,6 +549,7 @@ def main():
         "kill": cmd_kill,
         "skip": cmd_skip,
         "retry": cmd_retry,
+        "plan": cmd_plan,
     }
 
     if args.command is None:
