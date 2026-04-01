@@ -64,6 +64,11 @@ bash "$SCRIPT_DIR/run-task.sh" "$TASK_ID" || RUN_EXIT=$?
 
 if [ "$RUN_EXIT" -ne 0 ]; then
   echo "[orchestrator] run-task.sh failed for $TASK_ID (exit=$RUN_EXIT)" >&2
+  # Call healer to classify error (ensures error_class is set for Claude crashes too)
+  OUTPUT_FILE="/tmp/claude-out-${TASK_ID}.txt"
+  if [ -f "$OUTPUT_FILE" ]; then
+    python3 healer.py "$TASK_ID" "$OUTPUT_FILE" >&2 || true
+  fi
 fi
 
 # ── 5. Verify task (only if run succeeded) ──────────────

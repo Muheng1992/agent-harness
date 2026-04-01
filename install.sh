@@ -51,7 +51,7 @@ sqlite3 db/agent.db < schema.sql
 echo "  ✅ db/agent.db created"
 
 # ── 4. Make scripts executable ──────────────────────────
-chmod +x orchestrator.sh parallel-orchestrator.sh run-task.sh verify-task.sh setup-worktrees.sh notify.sh agent-ctl
+chmod +x orchestrator.sh parallel-orchestrator.sh loop-orchestrator.sh run-task.sh verify-task.sh setup-worktrees.sh notify.sh agent-ctl
 echo "  ✅ Scripts made executable"
 
 # ── 5. Create symlink ──────────────────────────────────
@@ -200,10 +200,19 @@ setup-express (無依賴)
 
 匯入完成後，告訴使用者：
 ```bash
+# 自動跑到全部完成（推薦）
+cd __HARNESS_HOME__ && bash loop-orchestrator.sh
+
+# 並行 + 自動跑到完
+cd __HARNESS_HOME__ && bash loop-orchestrator.sh --parallel
+
+# 自訂安全限制
+cd __HARNESS_HOME__ && bash loop-orchestrator.sh --max-rounds 20 --max-time 1800
+
 # 跑一輪（一次一個任務）
 cd __HARNESS_HOME__ && bash orchestrator.sh
 
-# 或並行跑
+# 或並行跑一輪
 cd __HARNESS_HOME__ && bash parallel-orchestrator.sh
 
 # 或用 agent-ctl 看狀態

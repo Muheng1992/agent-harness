@@ -1,4 +1,4 @@
-.PHONY: init setup-db setup-worktrees import-tasks clean
+.PHONY: init setup-db setup-worktrees import-tasks run-once run-parallel run-loop run-loop-parallel status clean
 
 # Initialize everything
 init: setup-db setup-worktrees
@@ -24,6 +24,14 @@ run-once:
 # Run parallel orchestration round
 run-parallel:
 	bash parallel-orchestrator.sh
+
+# Run loop until all tasks complete (single-threaded)
+run-loop:
+	bash loop-orchestrator.sh
+
+# Run loop until all tasks complete (parallel)
+run-loop-parallel:
+	bash loop-orchestrator.sh --parallel
 
 # Show status
 status:
