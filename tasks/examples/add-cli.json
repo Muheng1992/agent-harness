@@ -1,0 +1,9 @@
+{
+  "id": "add-cli",
+  "project": "example",
+  "goal": "Add argparse CLI to src/main.py. Support --name flag for greeting, --verbose for debug logging. Update tests accordingly.",
+  "touches": ["src/main.py", "tests/test_main.py"],
+  "verify": "python3 src/main.py --name World | grep -q 'Hello, World' && python3 -m pytest tests/ -v",
+  "depends_on": ["add-tests", "add-logging"],
+  "max_attempts": 5
+}

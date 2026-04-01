@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cp \"$CLAUDE_TRANSCRIPT_PATH\" .claude/backups/session-$(date +%s).jsonl 2>/dev/null || true",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat .claude/state/current-progress.md 2>/dev/null; echo '---'; git log --oneline -5 2>/dev/null || true",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

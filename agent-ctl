@@ -1,0 +1,389 @@
+#!/usr/bin/env python3
+"""agent-ctl — Monitoring and control CLI for the Agent Orchestrator."""
+
+import argparse
+import json
+import os
+import signal
+import sqlite3
+import sys
+from datetime import datetime
+from pathlib import Path
+
+DB_PATH = os.environ.get(
+    "AGENT_DB_PATH",
+    str(Path(__file__).resolve().parent / "db" / "agent.db"),
+)
+
+HARNESS_ROOT = Path(__file__).resolve().parent
+
+STATUS_ICONS = {
+    "pending": "\u23f3",
+    "running": "\U0001f504",
+    "pass": "\u2705",
+    "fail": "\u274c",
+    "escalated": "\U0001f6a8",
+    "skipped": "\u23ed\ufe0f",
+}
+
+
+def get_connection() -> sqlite3.Connection:
+    if not Path(DB_PATH).exists():
+        print(f"Error: database not found at {DB_PATH}", file=sys.stderr)
+        print("Set AGENT_DB_PATH or run from the harness directory.", file=sys.stderr)
+        sys.exit(1)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+# ── status ───────────────────────────────────────────────────────────
+
+def cmd_status(args):
+    conn = get_connection()
+
+    # Global state
+    row = conn.execute(
+        "SELECT value FROM control WHERE key = 'global_state'"
+    ).fetchone()
+    state = row["value"].upper() if row else "UNKNOWN"
+
+    # Task counts by status
+    counts = {}
+    for s in STATUS_ICONS:
+        r = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM tasks WHERE status = ?", (s,)
+        ).fetchone()
+        counts[s] = r["cnt"]
+
+    # Running tasks details
+    running_tasks = conn.execute("""
+        SELECT t.id, t.project, t.goal, t.attempt_count, t.max_attempts,
+               t.assigned_worker, t.error_class,
+               r.started_at
+        FROM tasks t
+        LEFT JOIN runs r ON r.task_id = t.id AND r.status = 'running'
+        WHERE t.status = 'running'
+        ORDER BY t.assigned_worker
+    """).fetchall()
+
+    # Escalated tasks
+    escalated_tasks = conn.execute("""
+        SELECT t.id, t.project, t.goal, t.max_attempts, t.error_class
+        FROM tasks t
+        WHERE t.status = 'escalated'
+        ORDER BY t.updated_at DESC
+    """).fetchall()
+
+    # Aggregate stats
+    stats = conn.execute("""
+        SELECT
+            COUNT(*) AS total_runs,
+            SUM(CASE WHEN status = 'pass' THEN 1 ELSE 0 END) AS pass_count,
+            SUM(CASE WHEN status IN ('pass', 'fail', 'error') THEN 1 ELSE 0 END) AS total_completed,
+            COALESCE(SUM(duration_sec), 0) AS total_duration
+        FROM runs
+    """).fetchone()
+
+    total_runs = stats["total_runs"]
+    pass_count = stats["pass_count"] or 0
+    total_completed = stats["total_completed"] or 0
+    total_duration = stats["total_duration"] or 0
+    pass_rate = round(pass_count / total_completed * 100, 1) if total_completed > 0 else 0
+
+    # ── Print dashboard ──
+    print("=" * 60)
+    print(f"  \U0001f916 Agent Orchestrator \u2014 {state}")
+    print("=" * 60)
+
+    print()
+    print("\U0001f4ca \u4efb\u52d9\u72c0\u614b:")
+    print(f"   \u23f3 pending: {counts['pending']}")
+    print(f"   \U0001f504 running: {counts['running']}")
+    print(f"   \u2705 pass: {counts['pass']}")
+    print(f"   \u274c fail: {counts['fail']}        (\u81ea\u52d5\u91cd\u6d3e\u4e2d)")
+    print(f"   \U0001f6a8 escalated: {counts['escalated']}   (\u9700\u8981\u4f60\u770b)")
+    print(f"   \u23ed\ufe0f  skipped: {counts['skipped']}")
+
+    print()
+    print("\u26a1 \u57f7\u884c\u4e2d:")
+    if running_tasks:
+        for t in running_tasks:
+            worker = t["assigned_worker"] if t["assigned_worker"] is not None else "?"
+            goal_trunc = t["goal"][:50] + "..." if len(t["goal"]) > 50 else t["goal"]
+            attempt = t["attempt_count"]
+            max_a = t["max_attempts"]
+            error = t["error_class"] or "\u9996\u6b21\u57f7\u884c"
+
+            elapsed = "?"
+            if t["started_at"]:
+                try:
+                    started = datetime.fromisoformat(t["started_at"])
+                    elapsed = f"{(datetime.utcnow() - started).total_seconds():.0f}"
+                except (ValueError, TypeError):
+                    pass
+
+            print(f"   Worker {worker} \u2502 {t['project']}/{t['id']}")
+            print(f"     {goal_trunc}")
+            print(f"     \u5617\u8a66 #{attempt}/{max_a} \u2502 \u5df2\u8dd1 {elapsed}s \u2502 \u4e0a\u6b21: {error}")
+    else:
+        print("   (\u7121)")
+
+    print()
+    print("\U0001f6a8 \u9700\u8981\u4ecb\u5165:")
+    if escalated_tasks:
+        for t in escalated_tasks:
+            error = t["error_class"] or "unknown"
+            print(f"   escalated \u2502 {t['project']}/{t['id']}")
+            print(f"     {t['max_attempts']} \u6b21\u5617\u8a66\u90fd\u5931\u6557\uff0c\u6700\u5f8c\u932f\u8aa4: {error}")
+            print(f"     \u2192 agent-ctl logs {t['id']} \u67e5\u770b\u8a73\u60c5")
+    else:
+        print("   (\u7121)")
+
+    print()
+    print("\U0001f4c8 \u7d2f\u8a08:")
+    print(f"   \u57f7\u884c\u8f2a\u6b21: {total_runs}")
+    print(f"   \u6210\u529f\u7387:   {pass_rate}% ({pass_count}/{total_completed})")
+    print(f"   \u8017\u6642:     {total_duration:.1f}s")
+
+    conn.close()
+
+
+# ── tasks ────────────────────────────────────────────────────────────
+
+def cmd_tasks(args):
+    conn = get_connection()
+    query = "SELECT * FROM tasks"
+    params = ()
+    if args.project:
+        query += " WHERE project = ?"
+        params = (args.project,)
+    query += " ORDER BY project, id"
+
+    tasks = conn.execute(query, params).fetchall()
+    if not tasks:
+        print("No tasks found.")
+        conn.close()
+        return
+
+    for t in tasks:
+        icon = STATUS_ICONS.get(t["status"], "?")
+        goal_trunc = t["goal"][:60] + "..." if len(t["goal"]) > 60 else t["goal"]
+        deps = t["depends_on"] if t["depends_on"] != "[]" else "-"
+        print(
+            f"{icon} {t['id']:20s} {t['project']:15s} "
+            f"{goal_trunc:63s} deps={deps}  "
+            f"attempt {t['attempt_count']}/{t['max_attempts']}"
+        )
+
+    conn.close()
+
+
+# ── logs ─────────────────────────────────────────────────────────────
+
+def cmd_logs(args):
+    conn = get_connection()
+
+    task = conn.execute("SELECT * FROM tasks WHERE id = ?", (args.task_id,)).fetchone()
+    if not task:
+        print(f"Error: task '{args.task_id}' not found.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Task: {task['id']}  Project: {task['project']}  Status: {task['status']}")
+    print(f"Goal: {task['goal']}")
+    print("-" * 80)
+
+    runs = conn.execute(
+        "SELECT * FROM runs WHERE task_id = ? ORDER BY started_at DESC",
+        (args.task_id,),
+    ).fetchall()
+
+    if not runs:
+        print("No runs recorded.")
+        conn.close()
+        return
+
+    for r in runs:
+        icon = STATUS_ICONS.get(r["status"], "?")
+        error = r["error_class"] or "-"
+        duration = f"{r['duration_sec']:.1f}s" if r["duration_sec"] is not None else "-"
+        output = (r["claude_output"] or r["verify_output"] or "")[:200]
+        output_line = output.replace("\n", " ") if output else "-"
+
+        print(
+            f"  attempt {r['attempt']} {icon} {r['status']:6s} "
+            f"err={error:20s} {duration:>8s}  {r['started_at'] or '-'}"
+        )
+        print(f"    output: {output_line}")
+
+    conn.close()
+
+
+# ── pause / resume / stop ────────────────────────────────────────────
+
+def _set_state(state: str):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE control SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'global_state'",
+        (state,),
+    )
+    conn.commit()
+    print(f"Orchestrator state set to: {state}")
+    conn.close()
+
+
+def cmd_pause(args):
+    _set_state("paused")
+
+
+def cmd_resume(args):
+    _set_state("running")
+
+
+def cmd_stop(args):
+    _set_state("stopped")
+
+
+# ── kill ─────────────────────────────────────────────────────────────
+
+def cmd_kill(args):
+    worktrees_dir = HARNESS_ROOT / ".worktrees"
+    if not worktrees_dir.exists():
+        print("No .worktrees directory found.", file=sys.stderr)
+        sys.exit(1)
+
+    if args.worker_id is not None:
+        targets = [args.worker_id]
+    else:
+        # Find all worker dirs
+        targets = []
+        for d in sorted(worktrees_dir.iterdir()):
+            if d.is_dir() and d.name.startswith("w"):
+                try:
+                    targets.append(int(d.name[1:]))
+                except ValueError:
+                    pass
+
+    if not targets:
+        print("No workers found.")
+        return
+
+    for wid in targets:
+        pid_file = worktrees_dir / f"w{wid}" / ".worker.pid"
+        if not pid_file.exists():
+            print(f"Worker {wid}: no .worker.pid file found, skipping")
+            continue
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, signal.SIGTERM)
+            print(f"Worker {wid}: sent SIGTERM to PID {pid}")
+        except ProcessLookupError:
+            print(f"Worker {wid}: process {pid} not found (already exited)")
+        except PermissionError:
+            print(f"Worker {wid}: permission denied for PID {pid}")
+        except ValueError:
+            print(f"Worker {wid}: invalid PID in .worker.pid")
+
+
+# ── skip ─────────────────────────────────────────────────────────────
+
+def cmd_skip(args):
+    conn = get_connection()
+    task = conn.execute("SELECT * FROM tasks WHERE id = ?", (args.task_id,)).fetchone()
+    if not task:
+        print(f"Error: task '{args.task_id}' not found.", file=sys.stderr)
+        sys.exit(1)
+
+    conn.execute(
+        "UPDATE tasks SET status = 'skipped', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (args.task_id,),
+    )
+    conn.commit()
+    print(f"Task '{args.task_id}' marked as skipped.")
+    conn.close()
+
+
+# ── retry ────────────────────────────────────────────────────────────
+
+def cmd_retry(args):
+    conn = get_connection()
+    task = conn.execute("SELECT * FROM tasks WHERE id = ?", (args.task_id,)).fetchone()
+    if not task:
+        print(f"Error: task '{args.task_id}' not found.", file=sys.stderr)
+        sys.exit(1)
+
+    conn.execute(
+        """UPDATE tasks
+           SET status = 'pending', attempt_count = 0,
+               error_class = NULL, last_error = NULL,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?""",
+        (args.task_id,),
+    )
+    conn.commit()
+    print(f"Task '{args.task_id}' reset to pending (attempt 0).")
+    conn.close()
+
+
+# ── main ─────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="agent-ctl",
+        description="Monitoring and control CLI for the Agent Orchestrator",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # status
+    sub.add_parser("status", help="Show orchestrator dashboard")
+
+    # tasks
+    p_tasks = sub.add_parser("tasks", help="Show task DAG")
+    p_tasks.add_argument("project", nargs="?", default=None, help="Filter by project")
+
+    # logs
+    p_logs = sub.add_parser("logs", help="Show execution history for a task")
+    p_logs.add_argument("task_id", help="Task ID to inspect")
+
+    # pause / resume / stop
+    sub.add_parser("pause", help="Pause the orchestrator")
+    sub.add_parser("resume", help="Resume the orchestrator")
+    sub.add_parser("stop", help="Stop the orchestrator")
+
+    # kill
+    p_kill = sub.add_parser("kill", help="Kill worker processes")
+    p_kill.add_argument("worker_id", nargs="?", type=int, default=None, help="Worker ID (omit for all)")
+
+    # skip
+    p_skip = sub.add_parser("skip", help="Skip a task")
+    p_skip.add_argument("task_id", help="Task ID to skip")
+
+    # retry
+    p_retry = sub.add_parser("retry", help="Reset and retry a task")
+    p_retry.add_argument("task_id", help="Task ID to retry")
+
+    args = parser.parse_args()
+
+    dispatch = {
+        "status": cmd_status,
+        "tasks": cmd_tasks,
+        "logs": cmd_logs,
+        "pause": cmd_pause,
+        "resume": cmd_resume,
+        "stop": cmd_stop,
+        "kill": cmd_kill,
+        "skip": cmd_skip,
+        "retry": cmd_retry,
+    }
+
+    if args.command is None:
+        # Default to status
+        cmd_status(args)
+    else:
+        dispatch[args.command](args)
+
+
+if __name__ == "__main__":
+    main()

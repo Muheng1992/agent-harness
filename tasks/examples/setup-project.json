@@ -1,0 +1,9 @@
+{
+  "id": "setup-project",
+  "project": "example",
+  "goal": "Initialize the project structure: create src/ directory, add a main.py with hello world, and create a basic README.md",
+  "touches": ["src/main.py", "README.md"],
+  "verify": "python3 src/main.py | grep -q 'Hello'",
+  "depends_on": [],
+  "max_attempts": 3
+}

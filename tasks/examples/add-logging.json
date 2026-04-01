@@ -1,0 +1,9 @@
+{
+  "id": "add-logging",
+  "project": "example",
+  "goal": "Add Python logging to src/main.py. Configure logging to output to both console and a log file at logs/app.log. Use INFO level by default.",
+  "touches": ["src/main.py"],
+  "verify": "python3 src/main.py && test -f logs/app.log",
+  "depends_on": ["setup-project"],
+  "max_attempts": 5
+}
