@@ -1,0 +1,10 @@
+{
+  "id": "add-tests",
+  "project": "harness-test",
+  "project_dir": "/tmp/harness-test-project",
+  "goal": "Create test_calculator.py with pytest unit tests for the calculator module. Test add, subtract, and multiply with at least 3 test cases each, including edge cases (zero, negative numbers). Use standard pytest conventions.",
+  "touches": ["test_calculator.py"],
+  "verify": "python3 -m pytest test_calculator.py -v",
+  "depends_on": ["create-calculator"],
+  "max_attempts": 5
+}

@@ -86,8 +86,9 @@ fi
 START_TIME=$(date +%s)
 CLAUDE_EXIT=0
 
-cd "$WORK_DIR" && claude --bare -p "$PROMPT" \
+cd "$WORK_DIR" && claude -p "$PROMPT" \
   --allowedTools "Edit,Write,Bash,Read" \
+  --dangerously-skip-permissions \
   --output-format json \
   > "$OUTPUT_FILE" 2>&1 || CLAUDE_EXIT=$?
 

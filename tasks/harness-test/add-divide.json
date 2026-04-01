@@ -1,0 +1,10 @@
+{
+  "id": "add-divide",
+  "project": "harness-test",
+  "project_dir": "/tmp/harness-test-project",
+  "goal": "Add a divide(a, b) function to calculator.py. It should return a / b as a float. If b is 0, raise a ValueError with message 'Cannot divide by zero'. Include type hints.",
+  "touches": ["calculator.py"],
+  "verify": "python3 -c 'from calculator import divide; assert divide(10,2)==5.0; assert divide(7,2)==3.5; print(\"division OK\")' && python3 -c 'import calculator; v=False\ntry: calculator.divide(1,0)\nexcept ValueError: v=True\nassert v; print(\"zero OK\")'",
+  "depends_on": ["create-calculator"],
+  "max_attempts": 5
+}

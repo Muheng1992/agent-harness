@@ -1,0 +1,10 @@
+{
+  "id": "final-check",
+  "project": "harness-test",
+  "project_dir": "/tmp/harness-test-project",
+  "goal": "Add test cases for the divide function to test_calculator.py. Test normal division, float results, and division by zero (should raise ValueError). Then run all tests to make sure everything works together.",
+  "touches": ["test_calculator.py"],
+  "verify": "python3 -m pytest test_calculator.py -v --tb=short",
+  "depends_on": ["add-tests", "add-divide"],
+  "max_attempts": 5
+}

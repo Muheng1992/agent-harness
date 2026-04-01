@@ -1,0 +1,10 @@
+{
+  "id": "create-calculator",
+  "project": "harness-test",
+  "project_dir": "/tmp/harness-test-project",
+  "goal": "Create a Python module calculator.py with three functions: add(a, b), subtract(a, b), multiply(a, b). Each function takes two numbers and returns the result. Include type hints. Example: add(2, 3) should return 5.",
+  "touches": ["calculator.py"],
+  "verify": "python3 -c \"from calculator import add, subtract, multiply; assert add(2,3)==5; assert subtract(5,3)==2; assert multiply(3,4)==12; print('OK')\"",
+  "depends_on": [],
+  "max_attempts": 3
+}
