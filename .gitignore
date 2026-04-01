@@ -1,0 +1,31 @@
+# Database
+db/*.db
+db/*.db-wal
+db/*.db-shm
+
+# Worktrees
+.worktrees/
+
+# Logs
+logs/*.log
+
+# Backups
+.claude/backups/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Worker PID files
+.worker.pid
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+/tmp/
+*.tmp
