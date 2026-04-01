@@ -1,0 +1,10 @@
+{
+  "id": "add-crud",
+  "project": "bookmark-cli",
+  "project_dir": "/Users/muhengli/sideproject/bookmark-cli",
+  "goal": "Add CRUD methods to BookmarkStore in models.py: add(url, title, tags=None) -> Bookmark (creates and saves a new bookmark, returns it), get(bookmark_id) -> Bookmark or None, delete(bookmark_id) -> bool (returns True if found and deleted), list_all() -> list[Bookmark] (returns all bookmarks). Each method should call _load/_save internally. Include type hints.",
+  "touches": ["models.py"],
+  "verify": "python3 -c 'import os, json; os.remove(\"test_crud.json\") if os.path.exists(\"test_crud.json\") else None; from models import BookmarkStore; s=BookmarkStore(\"test_crud.json\"); b=s.add(\"https://a.com\",\"A\"); assert s.get(b.id).title==\"A\"; assert len(s.list_all())==1; assert s.delete(b.id)==True; assert len(s.list_all())==0; os.remove(\"test_crud.json\"); print(\"crud OK\")'",
+  "depends_on": ["create-models"],
+  "max_attempts": 5
+}

@@ -1,0 +1,10 @@
+{
+  "id": "final-test",
+  "project": "bookmark-cli",
+  "project_dir": "/Users/muhengli/sideproject/bookmark-cli",
+  "goal": "Create test_bookmark.py with comprehensive pytest tests for the bookmark manager. Test all BookmarkStore methods: add, get, delete, list_all, search, search_by_tag. Use a temporary JSON file (use tmp_path fixture). Include at least 3 test cases per method, covering edge cases like: empty store, non-existent id, case-insensitive search, multiple tags, duplicate URLs. Then run all tests to make sure everything works.",
+  "touches": ["test_bookmark.py"],
+  "verify": "python3 -m pytest test_bookmark.py -v --tb=short",
+  "depends_on": ["add-cli"],
+  "max_attempts": 5
+}

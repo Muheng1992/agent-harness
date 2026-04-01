@@ -1,0 +1,10 @@
+{
+  "id": "add-search",
+  "project": "bookmark-cli",
+  "project_dir": "/Users/muhengli/sideproject/bookmark-cli",
+  "goal": "Add search methods to BookmarkStore in models.py: search(query) -> list[Bookmark] that searches in both url and title (case-insensitive substring match), and search_by_tag(tag) -> list[Bookmark] that returns bookmarks containing the given tag (case-insensitive). Include type hints.",
+  "touches": ["models.py"],
+  "verify": "python3 -c 'import os; os.remove(\"test_search.json\") if os.path.exists(\"test_search.json\") else None; from models import BookmarkStore; s=BookmarkStore(\"test_search.json\"); s.add(\"https://github.com\",\"GitHub\",[\"dev\",\"code\"]); s.add(\"https://google.com\",\"Google\",[\"search\"]); assert len(s.search(\"git\"))==1; assert len(s.search(\"GOOGLE\"))==1; assert len(s.search_by_tag(\"dev\"))==1; assert len(s.search_by_tag(\"DEV\"))==1; os.remove(\"test_search.json\"); print(\"search OK\")'",
+  "depends_on": ["create-models"],
+  "max_attempts": 5
+}

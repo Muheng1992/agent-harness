@@ -1,0 +1,10 @@
+{
+  "id": "add-cli",
+  "project": "bookmark-cli",
+  "project_dir": "/Users/muhengli/sideproject/bookmark-cli",
+  "goal": "Create cli.py with an argparse-based CLI for the bookmark manager. Subcommands: 'add --url URL --title TITLE [--tags tag1,tag2]' (prints added bookmark id), 'list' (prints all bookmarks as a formatted table), 'search QUERY' (searches url/title), 'tag TAG' (searches by tag), 'delete ID' (deletes by id). Use BookmarkStore from models.py. Make the script executable with if __name__ == '__main__'. The default store file should be 'bookmarks.json'.",
+  "touches": ["cli.py"],
+  "verify": "python3 -c 'import os; os.remove(\"test_cli.json\") if os.path.exists(\"test_cli.json\") else None' && python3 cli.py add --url https://example.com --title TestSite --tags dev,test && python3 cli.py list && python3 cli.py search example && python3 cli.py tag dev",
+  "depends_on": ["add-crud", "add-search"],
+  "max_attempts": 5
+}

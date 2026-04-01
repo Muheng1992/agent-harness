@@ -1,0 +1,10 @@
+{
+  "id": "create-models",
+  "project": "bookmark-cli",
+  "project_dir": "/Users/muhengli/sideproject/bookmark-cli",
+  "goal": "Create models.py with a Bookmark dataclass that has fields: id (str, uuid4 default), url (str), title (str), tags (list[str], default empty list), created_at (datetime, default now). Also create a BookmarkStore class that stores bookmarks in a JSON file. The constructor takes a file_path parameter (default 'bookmarks.json'). Include a _load() method that reads from the file (returns empty list if file doesn't exist) and a _save(bookmarks) method that writes the list to file. Use dataclasses and include type hints throughout.",
+  "touches": ["models.py"],
+  "verify": "python3 -c 'from models import Bookmark, BookmarkStore; b=Bookmark(url=\"https://example.com\", title=\"Test\"); assert b.url==\"https://example.com\"; assert b.tags==[]; assert b.id; print(\"models OK\")'",
+  "depends_on": [],
+  "max_attempts": 5
+}
