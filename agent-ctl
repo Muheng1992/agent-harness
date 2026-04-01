@@ -360,17 +360,24 @@ def cmd_plan(args):
             except (subprocess.TimeoutExpired, FileNotFoundError):
                 project_context = f"\n目標專案目錄: {project_path}\n"
 
+    # Resolve absolute project dir
+    abs_project_dir = ""
+    if project_dir:
+        abs_project_dir = str(Path(project_dir).resolve())
+
     prompt = f"""你是一個任務規劃器。根據以下目標，拆解成一個任務 DAG。
 
 目標: {goal}
 專案名: {project}
+專案目錄: {abs_project_dir or '(未指定)'}
 {project_context}
 
 每個任務必須是一個 JSON 物件，格式：
 {{
   "id": "unique-id",
   "project": "{project}",
-  "goal": "具體描述，讓另一個 Claude agent 知道要做什麼",
+  "project_dir": "{abs_project_dir}",
+  "goal": "具體描述，讓另一個 Claude agent 知道要做什麼。不需要寫 cd 指令，worker 已經在正確目錄。",
   "touches": ["file1.py"],
   "verify": "客觀驗證指令",
   "depends_on": ["前置任務 id"],

@@ -31,6 +31,7 @@ fi
 
 GOAL=$(echo "$TASK_JSON" | jq -r '.goal')
 PROJECT=$(echo "$TASK_JSON" | jq -r '.project')
+PROJECT_DIR=$(echo "$TASK_JSON" | jq -r '.project_dir // empty')
 ATTEMPT=$(echo "$TASK_JSON" | jq -r '.attempt_count')
 MAX_ATTEMPTS=$(echo "$TASK_JSON" | jq -r '.max_attempts')
 
@@ -70,7 +71,12 @@ INSTRUCTIONS:
 python3 task_picker.py mark-running "$TASK_ID" "$WORKER_ID"
 
 # ── 6. Determine working directory ──────────────────────
-if [ "$WORKER_ID" -gt 0 ] && [ -d ".worktrees/w${WORKER_ID}" ]; then
+# Priority: project_dir (跨專案) > worktree (並行隔離) > harness dir (fallback)
+if [ -n "$PROJECT_DIR" ] && [ -d "$PROJECT_DIR" ]; then
+  # 跨專案模式：在目標專案目錄執行
+  WORK_DIR="$PROJECT_DIR"
+  echo "[run-task] Working in target project: $WORK_DIR" >&2
+elif [ "$WORKER_ID" -gt 0 ] && [ -d ".worktrees/w${WORKER_ID}" ]; then
   WORK_DIR="$(pwd)/.worktrees/w${WORKER_ID}"
 else
   WORK_DIR="$(pwd)"

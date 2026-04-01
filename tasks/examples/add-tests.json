@@ -1,6 +1,7 @@
 {
   "id": "add-tests",
   "project": "example",
+  "project_dir": "/tmp/example-project",
   "goal": "Create tests/test_main.py with unit tests for src/main.py. Test the main function output.",
   "touches": ["tests/test_main.py"],
   "verify": "python3 -m pytest tests/ -v",

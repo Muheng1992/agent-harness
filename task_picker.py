@@ -48,6 +48,7 @@ def import_tasks(directory: str) -> int:
 
             task_id = data["id"]
             project = data.get("project", "default")
+            project_dir = data.get("project_dir", None)
             goal = data["goal"]
             verify_cmd = data.get("verify", None)
             depends_on = json.dumps(data.get("depends_on", []))
@@ -56,12 +57,13 @@ def import_tasks(directory: str) -> int:
 
             conn.execute(
                 """INSERT OR REPLACE INTO tasks
-                   (id, project, goal, verify_cmd, depends_on, touches,
+                   (id, project, project_dir, goal, verify_cmd, depends_on, touches,
                     status, attempt_count, max_attempts, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)""",
                 (
                     task_id,
                     project,
+                    project_dir,
                     goal,
                     verify_cmd,
                     depends_on,

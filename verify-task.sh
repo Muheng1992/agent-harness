@@ -26,7 +26,14 @@ fi
 echo "[verify] Verifying task $TASK_ID: $VERIFY_CMD" >&2
 
 # ── 2. Determine working directory ──────────────────────
-if [ "$WORKER_ID" -gt 0 ] && [ -d ".worktrees/w${WORKER_ID}" ]; then
+# Read project_dir from task if available
+PROJECT_DIR=$(python3 task_picker.py get "$TASK_ID" 2>/dev/null | jq -r '.project_dir // empty') || true
+
+if [ -n "$PROJECT_DIR" ] && [ -d "$PROJECT_DIR" ]; then
+  # 跨專案模式：在目標專案目錄驗證
+  WORK_DIR="$PROJECT_DIR"
+  echo "[verify] Working in target project: $WORK_DIR" >&2
+elif [ "$WORKER_ID" -gt 0 ] && [ -d ".worktrees/w${WORKER_ID}" ]; then
   WORK_DIR=".worktrees/w${WORKER_ID}"
 else
   WORK_DIR="."

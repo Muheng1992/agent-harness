@@ -7,6 +7,7 @@ PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS tasks (
   id            TEXT PRIMARY KEY,
   project       TEXT NOT NULL,
+  project_dir   TEXT,                -- 目標專案的絕對路徑（跨專案執行用）
   goal          TEXT NOT NULL,
   verify_cmd    TEXT,
   depends_on    TEXT DEFAULT '[]',   -- JSON array of task IDs
