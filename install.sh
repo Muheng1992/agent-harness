@@ -231,7 +231,11 @@ SKILL_EOF
 
 echo "  ✅ /harness skill installed to $COMMANDS_DIR/harness.md"
 
-# ── 8. Done ─────────────────────────────────────────────
+# ── 8. Install bootstrap skill ───────────────────────────
+cp "$INSTALL_DIR/install-harness.md" "$COMMANDS_DIR/install-harness.md"
+echo "  ✅ /install-harness skill installed to $COMMANDS_DIR/install-harness.md"
+
+# ── 9. Done ─────────────────────────────────────────────
 echo ""
 echo "🎉 Agent Harness installed successfully!"
 echo ""

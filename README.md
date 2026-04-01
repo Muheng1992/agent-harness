@@ -19,8 +19,20 @@
 
 ## 快速開始
 
+### 在 Claude Code 中安裝（最簡單）
+
+如果你已經有 `/install-harness` skill，直接在 Claude Code 裡輸入：
+```
+/install-harness
+```
+
+### 首次安裝
+
 ```bash
-# 1. 安裝
+# 一鍵安裝（推薦）
+curl -sSL https://raw.githubusercontent.com/Muheng1992/agent-harness/main/install.sh | bash
+
+# 或本地安裝
 bash install.sh
 # 或手動初始化
 make init
