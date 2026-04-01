@@ -1,0 +1,10 @@
+{
+  "id": "enhance-task-picker",
+  "project": "agent-harness-v2",
+  "project_dir": "/Users/muhengli/dev/agent-harness",
+  "goal": "擴充 task_picker.py 以支援角色系統和 pipeline。需要修改的部分：\n\n1. **import_tasks()** — 讀取 JSON 中的新欄位：\n   - `role`（預設 'implementer'）\n   - `stage`（可選）\n   - `pipeline_id`（可選）\n   - `spawned_by`（可選）\n   寫入 tasks 表對應欄位。\n\n2. **next_batch()** — 新增可選參數 `role_filter: str = None`：\n   - 如果指定 role_filter，只回傳符合該角色的任務\n   - 現有邏輯不變（依賴檢查 + 檔案衝突檢查照常）\n\n3. 新增 **list_roles()** 函式：\n   - 查詢目前所有任務的角色分佈：`SELECT role, COUNT(*), SUM(CASE WHEN status='pass' THEN 1 ELSE 0 END) FROM tasks GROUP BY role`\n   - 回傳 dict\n\n4. 新增 **get_pipeline_status(pipeline_id)** 函式：\n   - 查詢某 pipeline 下所有任務的狀態統計\n   - 回傳 dict: {total, pending, running, pass, fail, escalated}\n\n5. 新增 CLI 子命令：\n   - `list-roles` — 印出角色分佈\n   - `pipeline-status <pipeline_id>` — 印出 pipeline 狀態\n   - `next-batch --role <role>` — 新增 --role 篩選參數\n\n6. 確保 `get_task()` 回傳的 dict 包含新欄位（role, stage, pipeline_id, spawned_by）\n\n重要：\n- 向後相容。如果 JSON 沒有 role 欄位，預設是 'implementer'\n- 如果資料庫還沒有新欄位（舊 schema），import 不要報錯（用 try/except 處理）\n- 所有新功能都要有對應的 CLI 子命令\n- 讀取現有的 task_picker.py 理解程式碼風格後再修改",
+  "touches": ["task_picker.py"],
+  "verify": "python3 task_picker.py list-roles 2>&1 | head -5; python3 task_picker.py --help 2>&1 | grep -q 'pipeline-status' && python3 task_picker.py --help 2>&1 | grep -q 'list-roles' && echo 'PASS: task_picker enhanced'",
+  "depends_on": ["enhance-schema"],
+  "max_attempts": 5
+}

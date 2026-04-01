@@ -1,0 +1,28 @@
+name: bug-fix
+description: 修 bug 週期，含研究、除錯、測試、審查
+stages:
+  - name: research
+    role: researcher
+    goal_template: '分析 bug：{bug_description}。搜集錯誤日誌、重現步驟、相關程式碼上下文。輸出根因分析報告。'
+  - name: debug
+    role: debugger
+    goal_template: '根據根因分析修復 bug：{bug_description}。定位問題程式碼並套用最小修復。'
+  - name: test
+    role: tester
+    goal_template: '為修復的 bug 撰寫回歸測試。確認 bug 已修復且未引入新問題。驗證相關功能仍正常。'
+    on_fail: test-fix-loop
+  - name: review
+    role: reviewer
+    goal_template: '審查 bug 修復的程式碼變更。確認修復正確、無副作用、回歸測試充分。輸出審查報告。'
+    on_fail: review-fix-loop
+fix_loops:
+  test-fix-loop:
+    role: debugger
+    goal_template: '回歸測試失敗，修復問題：{fail_output}'
+    max_iterations: 3
+    then: test
+  review-fix-loop:
+    role: debugger
+    goal_template: '根據審查意見修復問題：{fail_output}'
+    max_iterations: 3
+    then: review

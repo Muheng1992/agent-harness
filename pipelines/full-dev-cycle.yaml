@@ -1,0 +1,35 @@
+name: full-dev-cycle
+description: 完整開發週期，含研究、設計、實作、測試、審查、文件
+stages:
+  - name: research
+    role: researcher
+    goal_template: '上網搜尋 {topic} 的最佳實踐、常見方案、已知陷阱。輸出結構化研究報告。'
+    optional: true
+  - name: design
+    role: architect
+    goal_template: '為 {feature} 設計系統架構。考慮現有程式碼結構，輸出元件圖、介面定義、資料流。'
+  - name: implement
+    role: implementer
+    goal_template: '根據架構設計實作 {feature}。遵循專案既有風格。'
+  - name: test
+    role: tester
+    goal_template: '為 {feature} 撰寫完整測試（單元+整合）。確保覆蓋率 ≥80%。'
+    on_fail: test-fix-loop
+  - name: review
+    role: reviewer
+    goal_template: '審查 {feature} 的程式碼。檢查品質、效能、安全性。輸出審查報告。'
+    on_fail: review-fix-loop
+  - name: document
+    role: documenter
+    goal_template: '撰寫 {feature} 的使用文件和 API 文件。'
+fix_loops:
+  test-fix-loop:
+    role: debugger
+    goal_template: '根據測試失敗結果修復問題：{fail_output}'
+    max_iterations: 3
+    then: test
+  review-fix-loop:
+    role: debugger
+    goal_template: '根據審查意見修復問題：{fail_output}'
+    max_iterations: 3
+    then: review

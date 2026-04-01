@@ -1,0 +1,93 @@
+name: mini-c-compiler
+description: 最小 C 編譯器，受 chibicc 啟發。每個 feature 是一個垂直切片（lexer+parser+codegen）
+test_cmd: make test
+
+milestones:
+  - id: m1-skeleton
+    name: 專案骨架
+    features:
+      - id: f1-init
+        name: Makefile + test runner + 空的 main.c
+        verify: make test
+
+  - id: m2-integers
+    name: 整數編譯
+    depends_on: [m1-skeleton]
+    features:
+      - id: f2-single-int
+        name: 編譯單一整數（42 → mov $42, %rax; ret）
+        verify: make test && echo '42' | ./minicc | gcc -x assembler - -o /tmp/test && /tmp/test; test $? -eq 42
+        depends_on: [f1-init]
+
+  - id: m3-arithmetic
+    name: 算術運算
+    depends_on: [m2-integers]
+    features:
+      - id: f3-add-sub
+        name: 加減法（5+20-4 → 21）
+        verify: make test
+        depends_on: [f2-single-int]
+      - id: f4-mul-div
+        name: 乘除法
+        verify: make test
+        depends_on: [f3-add-sub]
+      - id: f5-precedence
+        name: 運算子優先序（2+3*4=14）
+        verify: make test
+        depends_on: [f4-mul-div]
+      - id: f6-parentheses
+        name: 括號
+        verify: make test
+        depends_on: [f5-precedence]
+
+  - id: m4-comparisons
+    name: 比較運算
+    depends_on: [m3-arithmetic]
+    features:
+      - id: f7-comparison
+        name: ==, !=, <, <=, >, >=
+        verify: make test
+        depends_on: [f6-parentheses]
+
+  - id: m5-variables
+    name: 變數
+    depends_on: [m4-comparisons]
+    features:
+      - id: f8-local-vars
+        name: 區域變數宣告和賦值
+        verify: make test
+        depends_on: [f7-comparison]
+
+  - id: m6-control-flow
+    name: 控制流
+    depends_on: [m5-variables]
+    features:
+      - id: f9-if
+        name: if-else 語句
+        verify: make test
+        depends_on: [f8-local-vars]
+      - id: f10-while
+        name: while 迴圈
+        verify: make test
+        depends_on: [f9-if]
+      - id: f11-for
+        name: for 迴圈
+        verify: make test
+        depends_on: [f10-while]
+
+  - id: m7-functions
+    name: 函式
+    depends_on: [m6-control-flow]
+    features:
+      - id: f12-zero-arg
+        name: 無參數函式定義與呼叫
+        verify: make test
+        depends_on: [f11-for]
+      - id: f13-with-args
+        name: 帶參數函式（最多 6 個）
+        verify: make test
+        depends_on: [f12-zero-arg]
+      - id: f14-return
+        name: return 語句
+        verify: make test
+        depends_on: [f13-with-args]

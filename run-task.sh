@@ -34,8 +34,27 @@ PROJECT=$(echo "$TASK_JSON" | jq -r '.project')
 PROJECT_DIR=$(echo "$TASK_JSON" | jq -r '.project_dir // empty')
 ATTEMPT=$(echo "$TASK_JSON" | jq -r '.attempt_count')
 MAX_ATTEMPTS=$(echo "$TASK_JSON" | jq -r '.max_attempts')
+ROLE=$(echo "$TASK_JSON" | jq -r '.role // "implementer"')
+
+# ── 1b. Read role definition ──────────────────────────────
+ROLE_FILE="${SCRIPT_DIR}/roles/${ROLE}.md"
+ROLE_PROMPT=""
+ALLOWED_TOOLS=""
+if [ -f "$ROLE_FILE" ]; then
+  # 讀取 frontmatter 中的 allowed_tools
+  ALLOWED_TOOLS=$(sed -n '/^---$/,/^---$/p' "$ROLE_FILE" | grep 'allowed_tools:' | cut -d':' -f2- | tr -d ' ') || true
+  # 讀取 frontmatter 之後的內容作為角色 prompt
+  ROLE_PROMPT=$(sed '1,/^---$/d; 1,/^---$/d' "$ROLE_FILE") || true
+fi
+# 如果角色定義有 allowed_tools，用它覆蓋預設值
+if [ -n "$ALLOWED_TOOLS" ]; then
+  CLAUDE_TOOLS="$ALLOWED_TOOLS"
+else
+  CLAUDE_TOOLS="Edit,Write,Bash,Read"
+fi
 
 echo "[run-task] Running task $TASK_ID (attempt $((ATTEMPT + 1))/$MAX_ATTEMPTS, worker $WORKER_ID)" >&2
+echo "[run-task] Role: $ROLE | Tools: $CLAUDE_TOOLS" >&2
 
 # ── 2. Read memory context ──────────────────────────────
 MEMORY_CONTEXT=$(python3 memory.py read "$TASK_ID" 2>/dev/null) || MEMORY_CONTEXT=""
@@ -53,7 +72,9 @@ Analyze the error and try a different approach. Do NOT repeat the same mistake."
 fi
 
 # ── 4. Build prompt ─────────────────────────────────────
-PROMPT="You are an autonomous coding agent working on project '${PROJECT}'.
+PROMPT="${ROLE_PROMPT:+${ROLE_PROMPT}
+
+}You are an autonomous coding agent working on project '${PROJECT}'.
 
 TASK: ${GOAL}
 
@@ -87,7 +108,7 @@ START_TIME=$(date +%s)
 CLAUDE_EXIT=0
 
 cd "$WORK_DIR" && claude -p "$PROMPT" \
-  --allowedTools "Edit,Write,Bash,Read" \
+  --allowedTools "$CLAUDE_TOOLS" \
   --dangerously-skip-permissions \
   --output-format json \
   > "$OUTPUT_FILE" 2>&1 || CLAUDE_EXIT=$?

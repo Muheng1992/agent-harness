@@ -1,0 +1,16 @@
+name: quick-implement
+description: 快速實作，僅含實作與測試，適合小改動
+stages:
+  - name: implement
+    role: implementer
+    goal_template: '實作 {feature}。遵循專案既有風格，保持變更最小化。'
+  - name: test
+    role: tester
+    goal_template: '為 {feature} 撰寫測試並執行。確保新增功能正確且未破壞既有功能。'
+    on_fail: test-fix-loop
+fix_loops:
+  test-fix-loop:
+    role: debugger
+    goal_template: '測試失敗，修復問題：{fail_output}'
+    max_iterations: 3
+    then: test

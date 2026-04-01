@@ -1,0 +1,10 @@
+{
+  "id": "enhance-run-task",
+  "project": "agent-harness-v2",
+  "project_dir": "/Users/muhengli/dev/agent-harness",
+  "goal": "擴充 run-task.sh 以支援角色系統。主要改動：\n\n1. **讀取任務的 role 欄位**：\n   ```bash\n   ROLE=$(echo \"$TASK_JSON\" | jq -r '.role // \"implementer\"')\n   ```\n\n2. **讀取角色定義檔**：\n   ```bash\n   ROLE_FILE=\"${SCRIPT_DIR}/roles/${ROLE}.md\"\n   ROLE_PROMPT=\"\"\n   if [ -f \"$ROLE_FILE\" ]; then\n     # 讀取 frontmatter 中的 allowed_tools\n     ALLOWED_TOOLS=$(sed -n '/^---$/,/^---$/p' \"$ROLE_FILE\" | grep 'allowed_tools:' | cut -d':' -f2- | tr -d ' ')\n     # 讀取 frontmatter 之後的內容作為角色 prompt\n     ROLE_PROMPT=$(sed '1,/^---$/d; 1,/^---$/d' \"$ROLE_FILE\")\n   fi\n   # 如果角色定義有 allowed_tools，用它覆蓋預設值\n   if [ -n \"$ALLOWED_TOOLS\" ]; then\n     CLAUDE_TOOLS=\"$ALLOWED_TOOLS\"\n   else\n     CLAUDE_TOOLS=\"Edit,Write,Bash,Read\"\n   fi\n   ```\n\n3. **改造 prompt 組合邏輯**，在 PROMPT 的最前面注入角色 prompt：\n   ```bash\n   PROMPT=\"${ROLE_PROMPT}\n\n   You are working on project '${PROJECT}'.\n\n   TASK: ${GOAL}\n   ...\"\n   ```\n\n4. **改造 claude 呼叫**，使用動態工具權限：\n   ```bash\n   claude -p \"$PROMPT\" \\\n     --allowedTools \"$CLAUDE_TOOLS\" \\\n     --dangerously-skip-permissions \\\n     --output-format json\n   ```\n\n5. 加入 **角色日誌**：在執行開始時 echo 角色資訊\n   ```bash\n   echo \"[run-task] Role: $ROLE | Tools: $CLAUDE_TOOLS\" >&2\n   ```\n\n重要：\n- 讀取現有的 run-task.sh 理解完整邏輯後再修改\n- 如果 roles/ 目錄不存在或角色檔案不存在，fallback 到預設行為（通用 agent + 基本工具），不要報錯\n- 保持所有現有功能不變（memory、heal prompt、worktree 等）\n- 確保 shell script 語法正確（set -euo pipefail 下不能有未處理的錯誤）",
+  "touches": ["run-task.sh"],
+  "verify": "bash -n run-task.sh && grep -q 'ROLE' run-task.sh && grep -q 'ROLE_FILE' run-task.sh && grep -q 'ALLOWED_TOOLS\\|CLAUDE_TOOLS' run-task.sh && grep -q 'roles/' run-task.sh && echo 'PASS: run-task.sh enhanced with role support'",
+  "depends_on": ["enhance-schema", "create-role-definitions"],
+  "max_attempts": 5
+}

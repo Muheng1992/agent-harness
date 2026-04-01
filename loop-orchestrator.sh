@@ -137,6 +137,16 @@ while true; do
     exit 0
   fi
 
+  # ── Pipeline Advance ───────────────────────────────
+  # 檢查所有 active pipeline，推進到下一階段
+  ACTIVE_PIPELINES=$(sqlite3 "$DB_PATH" "SELECT id FROM pipelines WHERE status='active';" 2>/dev/null || true)
+  if [ -n "$ACTIVE_PIPELINES" ]; then
+    echo "$ACTIVE_PIPELINES" | while IFS= read -r PID; do
+      python3 pipeline.py advance "$PID" 2>&1 || true
+    done
+    echo "[loop] Pipeline advancement complete" >&2
+  fi
+
   # ── Smart cooldown ──────────────────────────────────
   COOLDOWN=$(compute_cooldown)
   echo "[loop] Cooling down for ${COOLDOWN}s..." >&2

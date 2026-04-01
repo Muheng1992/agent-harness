@@ -1,0 +1,10 @@
+{
+  "id": "create-pipeline-templates",
+  "project": "agent-harness-v2",
+  "project_dir": "/Users/muhengli/dev/agent-harness",
+  "goal": "建立 pipelines/ 目錄，裡面放預設的 pipeline 模板 YAML 檔案。\n\n需要建立以下 5 個模板：\n\n### 1. `pipelines/full-dev-cycle.yaml`\n完整開發週期（研究→設計→實作→測試→審查→文件）：\n```yaml\nname: full-dev-cycle\ndescription: 完整開發週期，含研究、設計、實作、測試、審查、文件\nstages:\n  - name: research\n    role: researcher\n    goal_template: '上網搜尋 {topic} 的最佳實踐、常見方案、已知陷阱。輸出結構化研究報告。'\n    optional: true\n  - name: design\n    role: architect\n    goal_template: '為 {feature} 設計系統架構。考慮現有程式碼結構，輸出元件圖、介面定義、資料流。'\n  - name: implement\n    role: implementer\n    goal_template: '根據架構設計實作 {feature}。遵循專案既有風格。'\n  - name: test\n    role: tester\n    goal_template: '為 {feature} 撰寫完整測試（單元+整合）。確保覆蓋率 ≥80%。'\n  - name: review\n    role: reviewer\n    goal_template: '審查 {feature} 的程式碼。檢查品質、效能、安全性。輸出審查報告。'\n    on_fail: fix-loop\n  - name: document\n    role: documenter\n    goal_template: '撰寫 {feature} 的使用文件和 API 文件。'\nfix_loops:\n  fix-loop:\n    role: debugger\n    goal_template: '根據審查意見修復問題：{fail_output}'\n    max_iterations: 3\n    then: review\n```\n\n### 2. `pipelines/tdd-cycle.yaml`\nTDD 週期（測試先行→實作→重構→審查）\n\n### 3. `pipelines/bug-fix.yaml`\n修 bug 週期（研究→除錯→測試→審查）\n\n### 4. `pipelines/security-review.yaml`\n安全審查週期（安全掃描→修復→重新掃描）\n\n### 5. `pipelines/quick-implement.yaml`\n快速實作（實作→測試，無設計和審查階段，適合小改動）\n\n每個模板都要有完整的 stages 定義和合理的 fix_loops（至少 review 和 test 階段要有 on_fail 觸發修復迴圈）。goal_template 要有 {feature} 或 {topic} 等 placeholder。",
+  "touches": ["pipelines/full-dev-cycle.yaml", "pipelines/tdd-cycle.yaml", "pipelines/bug-fix.yaml", "pipelines/security-review.yaml", "pipelines/quick-implement.yaml"],
+  "verify": "test -d pipelines && test $(ls pipelines/*.yaml 2>/dev/null | wc -l) -ge 5 && grep -q 'stages:' pipelines/full-dev-cycle.yaml && grep -q 'researcher' pipelines/full-dev-cycle.yaml && grep -q 'fix_loops' pipelines/full-dev-cycle.yaml && grep -q 'tdd' pipelines/tdd-cycle.yaml && echo 'PASS: 5 pipeline templates created'",
+  "depends_on": ["create-pipeline-engine"],
+  "max_attempts": 5
+}

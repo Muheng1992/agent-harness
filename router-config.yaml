@@ -1,0 +1,10 @@
+# Router 安全閥設定
+max_consecutive_fixes: 5
+max_tasks_per_day: 50
+tech_debt_threshold: 60
+checkpoint_interval: 5        # 每 N 輪建立 git checkpoint
+cooldown_after_fix: 10        # FIX 後等待秒數
+cooldown_after_build: 5
+cooldown_after_idle: 60
+notify_on_escalate: true
+notify_on_milestone: true

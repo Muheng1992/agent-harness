@@ -1,0 +1,10 @@
+{
+  "id": "enhance-orchestrator",
+  "project": "agent-harness-v2",
+  "project_dir": "/Users/muhengli/dev/agent-harness",
+  "goal": "擴充 loop-orchestrator.sh 和 orchestrator.sh 以支援 pipeline 自動推進。\n\n### loop-orchestrator.sh 改動\n\n在每輪結束後（所有任務跑完 + 驗證完畢），加入 pipeline advance 步驟：\n\n```bash\n# ── Pipeline Advance ───────────────────────────\n# 檢查所有 active pipeline，推進到下一階段\nACTIVE_PIPELINES=$(sqlite3 \"$DB_PATH\" \"SELECT id FROM pipelines WHERE status='active';\" 2>/dev/null || true)\nif [ -n \"$ACTIVE_PIPELINES\" ]; then\n  echo \"$ACTIVE_PIPELINES\" | while IFS= read -r PID; do\n    python3 pipeline.py advance \"$PID\" 2>&1 || true\n  done\n  echo \"[loop] Pipeline advancement complete\" >&2\nfi\n```\n\n這段要加在「執行一輪」之後、「智慧冷卻」之前。\n\n### orchestrator.sh 改動\n\n在單輪 orchestrator 的最後也加入同樣的 pipeline advance 邏輯。\n\n### 同時也要修改 verify-task.sh\n\n在任務通過驗證（mark-pass）之後，觸發 pipeline advance（如果該任務屬於某個 pipeline）：\n\n```bash\n# After mark-pass, check if task belongs to a pipeline\nPIPELINE_ID=$(echo \"$TASK_JSON\" | jq -r '.pipeline_id // empty')\nif [ -n \"$PIPELINE_ID\" ]; then\n  python3 pipeline.py advance \"$PIPELINE_ID\" 2>&1 || true\nfi\n```\n\n重要：\n- 讀取現有的 loop-orchestrator.sh、orchestrator.sh、verify-task.sh 完整內容後再修改\n- 不要破壞現有邏輯\n- pipeline.py 可能不存在（尚未建立），所以呼叫時要加 `|| true` 防止 set -e 中斷\n- 確保所有 shell 腳本語法正確",
+  "touches": ["loop-orchestrator.sh", "orchestrator.sh", "verify-task.sh"],
+  "verify": "bash -n loop-orchestrator.sh && bash -n orchestrator.sh && bash -n verify-task.sh && grep -q 'pipeline' loop-orchestrator.sh && grep -q 'pipeline' orchestrator.sh && grep -q 'pipeline_id\\|PIPELINE_ID' verify-task.sh && echo 'PASS: orchestrators enhanced with pipeline support'",
+  "depends_on": ["create-pipeline-engine"],
+  "max_attempts": 5
+}

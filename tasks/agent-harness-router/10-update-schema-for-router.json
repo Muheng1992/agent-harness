@@ -1,0 +1,10 @@
+{
+  "id": "update-schema-for-router",
+  "project": "agent-harness-router",
+  "project_dir": "/Users/muhengli/dev/agent-harness",
+  "goal": "更新 schema.sql 和 migration，加入 Router 需要的 router_decisions 表。\n\n## 在 schema.sql 新增\n\n```sql\nCREATE TABLE IF NOT EXISTS router_decisions (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  action TEXT NOT NULL CHECK(action IN ('FIX','BUILD','REFACTOR','EXPLORE','IDLE','ESCALATE')),\n  reason TEXT,\n  feature_id TEXT,          -- BUILD 時對應的 roadmap feature ID\n  task_ids TEXT DEFAULT '[]', -- JSON array of generated task IDs\n  tech_debt_score INTEGER,\n  test_status TEXT,          -- PASS / FAIL / NO_TESTS\n  consecutive_fixes INTEGER DEFAULT 0,\n  state_summary TEXT,        -- 精簡的狀態摘要\n  created_at DATETIME DEFAULT CURRENT_TIMESTAMP\n);\n\nCREATE INDEX IF NOT EXISTS idx_router_decisions_action ON router_decisions(action);\nCREATE INDEX IF NOT EXISTS idx_router_decisions_created_at ON router_decisions(created_at);\n```\n\n## 建立 migration\n\n`migrations/002-add-router-decisions.sql`：\n```sql\n-- Migration 002: Add router_decisions table\nCREATE TABLE IF NOT EXISTS router_decisions (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  action TEXT NOT NULL,\n  reason TEXT,\n  feature_id TEXT,\n  task_ids TEXT DEFAULT '[]',\n  tech_debt_score INTEGER,\n  test_status TEXT,\n  consecutive_fixes INTEGER DEFAULT 0,\n  state_summary TEXT,\n  created_at DATETIME DEFAULT CURRENT_TIMESTAMP\n);\n\nCREATE INDEX IF NOT EXISTS idx_router_decisions_action ON router_decisions(action);\nCREATE INDEX IF NOT EXISTS idx_router_decisions_created_at ON router_decisions(created_at);\n```\n\n重要：\n- 先讀取現有 schema.sql 完整內容再修改（上一輪已經加了 roles 和 pipelines 的欄位）\n- Migration 用 CREATE TABLE IF NOT EXISTS，安全可重複執行\n- 不要修改任何現有的表定義",
+  "touches": ["schema.sql", "migrations/002-add-router-decisions.sql"],
+  "verify": "grep -q 'router_decisions' schema.sql && test -f migrations/002-add-router-decisions.sql && grep -q 'router_decisions' migrations/002-add-router-decisions.sql && echo 'PASS'",
+  "depends_on": [],
+  "max_attempts": 5
+}

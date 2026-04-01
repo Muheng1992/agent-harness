@@ -1,0 +1,60 @@
+name: calculator
+description: 一個命令列計算機，支援四則運算和變數
+test_cmd: python3 -m pytest tests/ -v
+
+milestones:
+  - id: m1-skeleton
+    name: 專案骨架
+    status: pending
+    features:
+      - id: f1-init
+        name: 建立專案結構、主入口、測試框架
+        status: pending
+        verify: python3 -m pytest tests/ -v
+
+  - id: m2-basic-math
+    name: 基本運算
+    status: pending
+    depends_on: [m1-skeleton]
+    features:
+      - id: f2-addition
+        name: 加法運算（1+2=3）
+        status: pending
+        verify: python3 -m pytest tests/ -v -k test_addition
+        depends_on: [f1-init]
+      - id: f3-subtraction
+        name: 減法運算
+        status: pending
+        verify: python3 -m pytest tests/ -v -k test_subtraction
+        depends_on: [f1-init]
+      - id: f4-multiplication
+        name: 乘法運算
+        status: pending
+        verify: python3 -m pytest tests/ -v -k test_multiplication
+        depends_on: [f1-init]
+      - id: f5-division
+        name: 除法運算（含除零處理）
+        status: pending
+        verify: python3 -m pytest tests/ -v -k test_division
+        depends_on: [f1-init]
+
+  - id: m3-advanced
+    name: 進階功能
+    status: pending
+    depends_on: [m2-basic-math]
+    features:
+      - id: f6-parentheses
+        name: 括號支援（優先序）
+        status: pending
+        verify: python3 -m pytest tests/ -v -k test_parentheses
+        depends_on: [f2-addition, f4-multiplication]
+      - id: f7-variables
+        name: 變數賦值與引用（x = 5; x + 3）
+        status: pending
+        verify: python3 -m pytest tests/ -v -k test_variables
+        depends_on: [f6-parentheses]
+      - id: f8-repl
+        name: 互動式 REPL
+        status: pending
+        verify: echo '1+2' | python3 main.py | grep -q '3'
+        depends_on: [f7-variables]

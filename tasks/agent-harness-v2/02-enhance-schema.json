@@ -1,0 +1,10 @@
+{
+  "id": "enhance-schema",
+  "project": "agent-harness-v2",
+  "project_dir": "/Users/muhengli/dev/agent-harness",
+  "goal": "擴充 schema.sql，在 tasks 表新增以下欄位（使用 ALTER TABLE 相容方式，即在 CREATE TABLE 中直接加入，因為 schema.sql 是初始建立用的）：\n\n1. `role TEXT DEFAULT 'implementer'` — 此任務指派的角色（對應 roles/ 下的定義檔名，不含 .md）\n2. `stage TEXT` — 此任務所屬的 pipeline 階段名稱（如 'research', 'design', 'implement', 'test', 'review'）\n3. `pipeline_id TEXT` — pipeline 群組 ID（同一個 pipeline 的所有任務共用同一個 ID）\n4. `spawned_by TEXT` — 觸發此任務的上游任務 ID（用於 pipeline 自動產生的後續任務）\n\n同時建立一個新的 pipelines 表：\n```sql\nCREATE TABLE IF NOT EXISTS pipelines (\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL,\n  project TEXT NOT NULL,\n  template TEXT,           -- 使用的 pipeline 模板名稱\n  config TEXT DEFAULT '{}', -- JSON 配置（變數替換等）\n  status TEXT DEFAULT 'active' CHECK(status IN ('active','completed','failed','paused')),\n  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,\n  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP\n);\n```\n\n新增 index：\n```sql\nCREATE INDEX IF NOT EXISTS idx_tasks_role ON tasks(role);\nCREATE INDEX IF NOT EXISTS idx_tasks_pipeline_id ON tasks(pipeline_id);\nCREATE INDEX IF NOT EXISTS idx_pipelines_status ON pipelines(status);\n```\n\n另外建立一個 migration 腳本 `migrations/001-add-roles-and-pipelines.sql`，用 ALTER TABLE 方式為已存在的資料庫新增欄位（SQLite 的 ALTER TABLE ADD COLUMN），這樣已有的 db 也能升級。migration 腳本要安全（用 ALTER TABLE IF NOT EXISTS 風格，即先檢查欄位是否存在再加）。\n\n重要：不要破壞現有 schema 的向後相容性。新欄位都有 DEFAULT 值。",
+  "touches": ["schema.sql", "migrations/001-add-roles-and-pipelines.sql"],
+  "verify": "grep -q 'role TEXT' schema.sql && grep -q 'pipeline_id TEXT' schema.sql && grep -q 'pipelines' schema.sql && test -f migrations/001-add-roles-and-pipelines.sql && grep -q 'ALTER TABLE' migrations/001-add-roles-and-pipelines.sql && echo 'PASS: schema enhanced'",
+  "depends_on": [],
+  "max_attempts": 5
+}

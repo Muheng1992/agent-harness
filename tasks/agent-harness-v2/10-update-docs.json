@@ -1,0 +1,10 @@
+{
+  "id": "update-docs",
+  "project": "agent-harness-v2",
+  "project_dir": "/Users/muhengli/dev/agent-harness",
+  "goal": "更新所有文件以反映多角色 pipeline 系統的新功能。\n\n### 1. 更新 README.md\n\n在現有內容之後，新增以下章節：\n\n#### 多角色系統\n- 11 個內建角色的一覽表（名稱、專長、工具權限）\n- 如何在 task JSON 中指定角色\n- 角色定義檔的格式說明\n- 如何自訂新角色\n\n#### Pipeline 引擎\n- Pipeline 概念說明（什麼是 pipeline、為什麼需要它）\n- 5 個內建模板的說明\n- 如何建立 pipeline（CLI 指令）\n- Pipeline 自動推進機制說明\n- Fix Loop 修復迴圈說明\n- 如何自訂 pipeline 模板\n\n#### 使用範例\n- 範例 1：用 full-dev-cycle pipeline 開發新功能\n- 範例 2：用 bug-fix pipeline 修復 bug\n- 範例 3：手動指定角色的 task JSON\n\n### 2. 更新 docs/architecture.md\n\n加入：\n- 角色系統架構圖（ASCII art）\n- Pipeline 引擎的資料流\n- 新增的資料庫欄位說明\n- 元件交互圖（task_picker ↔ pipeline.py ↔ run-task.sh ↔ roles/）\n\n### 3. 新增 docs/roles.md\n\n詳細描述每個角色的：\n- 設計理念\n- 適用場景\n- 工具權限及原因\n- 範例 prompt\n\n重要：\n- 讀取現有 README.md 和 docs/architecture.md 的完整內容後再修改\n- 保持現有文件內容不變，只新增章節\n- 使用繁體中文\n- 包含實際可執行的指令範例",
+  "touches": ["README.md", "docs/architecture.md", "docs/roles.md"],
+  "verify": "grep -q 'pipeline' README.md && grep -q '角色' README.md && grep -q 'researcher' README.md && test -f docs/roles.md && grep -q 'pipeline' docs/architecture.md && echo 'PASS: docs updated'",
+  "depends_on": ["integration-test"],
+  "max_attempts": 5
+}

@@ -717,4 +717,221 @@ curl -sSL https://raw.githubusercontent.com/Muheng1992/agent-harness/main/instal
 
 ---
 
-*文件版本: 2.0 | 建立日期: 2026-04-01 | Agent Harness 架構設計*
+## 11. 多角色系統架構
+
+### 11.1 角色系統架構圖
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        run-task.sh                              │
+│  ┌───────────┐    ┌───────────────┐    ┌──────────────────┐    │
+│  │ 讀取 task │───→│ 載入 role 定義 │───→│ 組合最終 prompt  │    │
+│  │ (task_id) │    │ (roles/*.md)  │    │ role + goal +    │    │
+│  └───────────┘    └───────────────┘    │ memory + heal    │    │
+│                          │              └────────┬─────────┘    │
+│                          │                       │              │
+│                   ┌──────▼──────┐         ┌──────▼──────┐      │
+│                   │ 解析 YAML   │         │ claude -p   │      │
+│                   │ frontmatter │         │ --allowedTools│     │
+│                   │             │         │ $CLAUDE_TOOLS │     │
+│                   │ name        │         └─────────────┘      │
+│                   │ allowed_tools│                               │
+│                   │ model       │                               │
+│                   └─────────────┘                               │
+└─────────────────────────────────────────────────────────────────┘
+
+角色定義檔結構：
+┌─────────────────────────────┐
+│  roles/                     │
+│  ├── planner.md        只讀 │  ← Read,Grep,Glob,Bash
+│  ├── researcher.md     只讀 │  ← Read,Bash,WebSearch,WebFetch,Grep,Glob
+│  ├── architect.md      只讀 │  ← Read,Grep,Glob,Bash
+│  ├── implementer.md    讀寫 │  ← Edit,Write,Bash,Read,Grep,Glob
+│  ├── tester.md         讀寫 │  ← Edit,Write,Bash,Read,Grep,Glob
+│  ├── reviewer.md       只讀 │  ← Read,Grep,Glob,Bash
+│  ├── debugger.md       讀寫 │  ← Edit,Write,Bash,Read,Grep,Glob
+│  ├── security-auditor.md只讀│  ← Read,Grep,Glob,Bash
+│  ├── documenter.md     讀寫 │  ← Write,Edit,Read,Grep,Glob,Bash
+│  ├── integrator.md     讀寫 │  ← Edit,Write,Bash,Read,Grep,Glob
+│  └── devops.md         讀寫 │  ← Edit,Write,Bash,Read,Grep,Glob
+└─────────────────────────────┘
+
+工具權限分級：
+┌──────────────┬──────────────────────────────────────────┐
+│ 分析/審查類   │ 只授予 Read, Grep, Glob, Bash            │
+│ （不修改程式碼）│ planner, architect, reviewer,            │
+│              │ security-auditor                          │
+├──────────────┼──────────────────────────────────────────┤
+│ 實作/修復類   │ 額外授予 Edit, Write                      │
+│ （需修改程式碼）│ implementer, tester, debugger,           │
+│              │ documenter, integrator, devops            │
+├──────────────┼──────────────────────────────────────────┤
+│ 研究類       │ 額外授予 WebSearch, WebFetch               │
+│ （需上網查資料）│ researcher                               │
+└──────────────┴──────────────────────────────────────────┘
+```
+
+### 11.2 角色載入流程
+
+```mermaid
+sequenceDiagram
+    participant RT as run-task.sh
+    participant TP as task_picker.py
+    participant RF as roles/*.md
+    participant Mem as memory.py
+    participant C as Claude CLI
+
+    RT->>TP: get $TASK_ID
+    TP-->>RT: {goal, role, last_error, ...}
+
+    RT->>RF: 讀取 roles/${ROLE}.md
+    RF-->>RT: frontmatter (allowed_tools) + 角色 prompt
+
+    RT->>Mem: read $TASK_ID
+    Mem-->>RT: 歷史上下文
+
+    Note over RT: 組合 prompt =<br/>角色 prompt + goal +<br/>memory context + heal prompt
+
+    RT->>C: claude -p "$PROMPT"<br/>--allowedTools "$CLAUDE_TOOLS"
+    C-->>RT: 執行結果
+```
+
+---
+
+## 12. Pipeline 引擎資料流
+
+### 12.1 Pipeline 生命週期
+
+```mermaid
+stateDiagram-v2
+    [*] --> active: pipeline.py create
+    active --> active: advance（部分階段完成）
+    active --> completed: 所有階段 pass
+    active --> failed: 任一階段 escalated
+    active --> paused: 手動暫停
+
+    paused --> active: 手動恢復
+```
+
+### 12.2 Pipeline 建立與執行資料流
+
+```mermaid
+flowchart TB
+    subgraph "1. Pipeline 建立"
+        User["使用者"]
+        User -->|"pipeline.py create<br/>--template full-dev-cycle<br/>--var feature=X"| PY["pipeline.py"]
+        PY -->|"讀取模板"| TPL["pipelines/*.yaml"]
+        PY -->|"替換 {variable}"| Goals["產生各階段 goal"]
+        PY -->|"寫入 pipelines 表"| DB[(SQLite)]
+        PY -->|"寫入 tasks 表<br/>（含 role, stage, pipeline_id,<br/>depends_on 鏈）"| DB
+    end
+
+    subgraph "2. 自動執行"
+        Loop["loop-orchestrator.sh"]
+        Loop -->|"照常運作"| Orch["orchestrator.sh"]
+        Orch -->|"next-batch"| TP["task_picker.py"]
+        TP -->|"depends_on 滿足?"| DB
+        TP -->|"回傳可執行任務"| Orch
+        Orch -->|"run-task.sh"| RT["run-task.sh"]
+        RT -->|"載入角色定義"| Roles["roles/*.md"]
+        RT -->|"claude -p"| Claude["Claude CLI"]
+    end
+
+    subgraph "3. Fix Loop"
+        Fail["階段失敗"]
+        Fail -->|"pipeline.py advance"| Advance["advance 邏輯"]
+        Advance -->|"on_fail 定義?"| Check{"fix_count<br/>< max?"}
+        Check -->|"Yes"| Spawn["產生 debugger 任務<br/>+ 重試原階段任務"]
+        Check -->|"No"| Esc["escalate"]
+        Spawn -->|"寫入 tasks 表"| DB
+    end
+
+    DB --> Loop
+
+    style DB fill:#1a3a5c,color:#fff
+    style Claude fill:#5c1a1a,color:#fff
+    style Loop fill:#2d5016,color:#fff
+```
+
+### 12.3 元件交互圖
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        使用者操作                                     │
+│  pipeline.py create ──→ 建立 pipeline + tasks                        │
+│  agent-ctl status    ──→ 查看執行進度                                  │
+│  loop-orchestrator.sh ─→ 啟動自動執行                                  │
+└──────────┬──────────────────────────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│  task_picker.py                                                      │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │ next-batch: 查詢 status='pending' AND depends_on 全 pass       │  │
+│  │            + touches 衝突檢查 + role 欄位保留                    │  │
+│  └────────────────┬───────────────────────────────────────────────┘  │
+└───────────────────┼──────────────────────────────────────────────────┘
+                    │ 回傳 task_id（含 role 資訊）
+                    ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│  run-task.sh                                                         │
+│  ┌──────────┐  ┌──────────────┐  ┌────────────┐  ┌──────────────┐  │
+│  │ 讀取 task │→│ 讀取 role 定義│→│ 讀取 memory │→│ 組合 prompt   │  │
+│  │ (DB)     │  │ (roles/*.md) │  │ (memory.py)│  │ + heal context│  │
+│  └──────────┘  └──────────────┘  └────────────┘  └──────┬───────┘  │
+│                                                          │          │
+│                                              claude -p + --allowedTools│
+└──────────────────────────────────────────────────────────────────────┘
+                    │ 執行完成
+                    ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│  pipeline.py advance（由 orchestrator 在每輪呼叫）                     │
+│  ┌──────────────────────────────────────────────────────────────┐    │
+│  │ 檢查 pipeline 下所有 tasks 的 status                          │    │
+│  │ ├─ 全部 pass → pipeline status = completed                   │    │
+│  │ ├─ 有 escalated → pipeline status = failed                   │    │
+│  │ └─ 有 fail + on_fail 定義 → 產生 debugger + retry 任務        │    │
+│  └──────────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 13. 新增的資料庫欄位
+
+### 13.1 tasks 表新增欄位
+
+| 欄位 | 型別 | 預設值 | 說明 |
+|------|------|--------|------|
+| `role` | TEXT | `'implementer'` | 指派角色，對應 `roles/*.md` 的檔案名稱 |
+| `stage` | TEXT | NULL | Pipeline 階段名稱（如 research、design、implement） |
+| `pipeline_id` | TEXT | NULL | 所屬 pipeline 群組 ID，用於追蹤多階段流程 |
+| `spawned_by` | TEXT | NULL | 觸發此任務的上游任務 ID（fix loop 產生的任務會指向失敗的原任務） |
+
+### 13.2 新增 pipelines 表
+
+```sql
+CREATE TABLE IF NOT EXISTS pipelines (
+  id         TEXT PRIMARY KEY,           -- pipe-{timestamp}-{random}
+  name       TEXT NOT NULL,              -- 模板顯示名稱
+  project    TEXT NOT NULL,              -- 所屬專案
+  template   TEXT,                       -- 使用的模板名稱（如 full-dev-cycle）
+  config     TEXT DEFAULT '{}',          -- JSON 配置（變數、verify_cmd、fix_loops）
+  status     TEXT DEFAULT 'active'       -- active|completed|failed|paused
+             CHECK(status IN ('active','completed','failed','paused')),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### 13.3 新增索引
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_tasks_role ON tasks(role);
+CREATE INDEX IF NOT EXISTS idx_tasks_pipeline_id ON tasks(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pipelines_status ON pipelines(status);
+```
+
+---
+
+*文件版本: 3.0 | 建立日期: 2026-04-01 | Agent Harness 架構設計（含多角色 + Pipeline 系統）*

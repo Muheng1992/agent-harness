@@ -1,0 +1,34 @@
+name: tdd-cycle
+description: TDD 週期，測試先行→實作→重構→審查
+stages:
+  - name: write-tests
+    role: tester
+    goal_template: '根據需求為 {feature} 撰寫失敗測試案例（Red 階段）。涵蓋正常流程、邊界條件、錯誤情境。'
+  - name: implement
+    role: implementer
+    goal_template: '撰寫最少量程式碼讓 {feature} 的所有測試通過（Green 階段）。不做多餘設計。'
+    on_fail: implement-fix-loop
+  - name: refactor
+    role: implementer
+    goal_template: '重構 {feature} 的實作程式碼（Refactor 階段）。改善可讀性、消除重複、優化結構，確保測試仍全部通過。'
+    on_fail: refactor-fix-loop
+  - name: review
+    role: reviewer
+    goal_template: '審查 {feature} 的程式碼與測試。檢查測試覆蓋率、程式碼品質、TDD 流程合規性。輸出審查報告。'
+    on_fail: review-fix-loop
+fix_loops:
+  implement-fix-loop:
+    role: debugger
+    goal_template: '測試未通過，修復實作程式碼：{fail_output}'
+    max_iterations: 5
+    then: implement
+  refactor-fix-loop:
+    role: debugger
+    goal_template: '重構後測試失敗，修復問題：{fail_output}'
+    max_iterations: 3
+    then: refactor
+  review-fix-loop:
+    role: debugger
+    goal_template: '根據審查意見修復問題：{fail_output}'
+    max_iterations: 3
+    then: review

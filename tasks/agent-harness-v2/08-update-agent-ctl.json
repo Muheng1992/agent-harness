@@ -1,0 +1,10 @@
+{
+  "id": "update-agent-ctl",
+  "project": "agent-harness-v2",
+  "project_dir": "/Users/muhengli/dev/agent-harness",
+  "goal": "擴充 agent-ctl CLI 工具以支援角色和 pipeline 資訊顯示。\n\n### 新增子命令\n\n1. **`agent-ctl roles`** — 顯示角色分佈統計\n   ```\n   Role Distribution:\n   implementer  ████████████  12 (6 pass, 3 pending, 2 running, 1 fail)\n   tester       ██████        6  (4 pass, 2 pending)\n   reviewer     ████          4  (2 pass, 2 pending)\n   researcher   ██            2  (2 pass)\n   ```\n\n2. **`agent-ctl pipelines`** — 列出所有 pipeline 及其狀態\n   ```\n   Active Pipelines:\n   pipe-20260401-abc123  full-dev-cycle  my-project  [████░░] 4/6 stages\n   pipe-20260401-def456  tdd-cycle       web-api     [██████] completed\n   ```\n\n3. **`agent-ctl pipeline <id>`** — 顯示某 pipeline 的詳細狀態\n   ```\n   Pipeline: pipe-20260401-abc123 (full-dev-cycle)\n   Project: my-project\n   \n   Stages:\n   ✓ research    → pass   (researcher)\n   ✓ design      → pass   (architect)\n   ● implement   → running (implementer, worker 2)\n   ○ test        → pending (tester)\n   ○ review      → pending (reviewer)\n   ○ document    → pending (documenter)\n   ```\n\n### 修改現有 status 子命令\n\n在 `agent-ctl status` 的輸出中，加入角色統計摘要和 active pipeline 數量：\n```\nStatus: 3 pass | 2 running | 1 pending | 0 fail\nRoles: implementer(3) tester(2) reviewer(1)\nPipelines: 1 active, 0 completed\n```\n\n重要：\n- 先讀取現有 agent-ctl 的完整內容，理解它的結構（bash script with subcommands）\n- 查詢 pipeline 相關資訊時，如果 pipelines 表不存在不要報錯（用 sqlite3 的 IF EXISTS 或 shell 的 2>/dev/null || true）\n- 保持現有所有功能不變",
+  "touches": ["agent-ctl"],
+  "verify": "python3 -c \"import py_compile; py_compile.compile('agent-ctl', doraise=True)\" && grep -q 'roles\\|pipeline' agent-ctl && python3 agent-ctl --help 2>&1 | grep -qi 'role\\|pipeline' && echo 'PASS: agent-ctl updated'",
+  "depends_on": ["create-pipeline-engine", "enhance-task-picker"],
+  "max_attempts": 5
+}

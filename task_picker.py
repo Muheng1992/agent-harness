@@ -55,24 +55,39 @@ def import_tasks(directory: str) -> int:
             touches = json.dumps(data.get("touches", []))
             max_attempts = data.get("max_attempts", 5)
 
-            conn.execute(
-                """INSERT OR REPLACE INTO tasks
-                   (id, project, project_dir, goal, verify_cmd, depends_on, touches,
-                    status, attempt_count, max_attempts, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)""",
-                (
-                    task_id,
-                    project,
-                    project_dir,
-                    goal,
-                    verify_cmd,
-                    depends_on,
-                    touches,
-                    max_attempts,
-                    datetime.utcnow().isoformat(),
-                    datetime.utcnow().isoformat(),
-                ),
-            )
+            role = data.get("role", "implementer")
+            stage = data.get("stage", None)
+            pipeline_id = data.get("pipeline_id", None)
+            spawned_by = data.get("spawned_by", None)
+
+            now = datetime.utcnow().isoformat()
+            try:
+                conn.execute(
+                    """INSERT OR REPLACE INTO tasks
+                       (id, project, project_dir, goal, verify_cmd, depends_on, touches,
+                        status, attempt_count, max_attempts, role, stage, pipeline_id,
+                        spawned_by, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        task_id, project, project_dir, goal, verify_cmd,
+                        depends_on, touches, max_attempts,
+                        role, stage, pipeline_id, spawned_by,
+                        now, now,
+                    ),
+                )
+            except sqlite3.OperationalError:
+                # 舊 schema 沒有新欄位，退回原始寫法
+                conn.execute(
+                    """INSERT OR REPLACE INTO tasks
+                       (id, project, project_dir, goal, verify_cmd, depends_on, touches,
+                        status, attempt_count, max_attempts, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)""",
+                    (
+                        task_id, project, project_dir, goal, verify_cmd,
+                        depends_on, touches, max_attempts,
+                        now, now,
+                    ),
+                )
             count += 1
 
         conn.commit()
@@ -163,7 +178,7 @@ def record_failure(task_id: str, failure_text: str):
         conn.close()
 
 
-def next_batch(max_workers: int) -> list:
+def next_batch(max_workers: int, role_filter: str = None) -> list:
     """Get up to max_workers non-conflicting ready tasks.
 
     A task is ready when:
@@ -176,9 +191,15 @@ def next_batch(max_workers: int) -> list:
     conn = get_connection()
     try:
         # Get all pending tasks
-        pending = conn.execute(
-            "SELECT * FROM tasks WHERE status = 'pending'"
-        ).fetchall()
+        if role_filter:
+            pending = conn.execute(
+                "SELECT * FROM tasks WHERE status = 'pending' AND role = ?",
+                (role_filter,),
+            ).fetchall()
+        else:
+            pending = conn.execute(
+                "SELECT * FROM tasks WHERE status = 'pending'"
+            ).fetchall()
 
         # Get currently running tasks' touched files
         running = conn.execute(
@@ -243,6 +264,42 @@ def escalate_task(task_id: str):
         conn.close()
 
 
+def list_roles() -> dict:
+    """查詢所有任務的角色分佈，回傳 {role: {total, passed}}。"""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT role,
+                      COUNT(*) AS total,
+                      SUM(CASE WHEN status='pass' THEN 1 ELSE 0 END) AS passed
+               FROM tasks GROUP BY role"""
+        ).fetchall()
+        return {r["role"]: {"total": r["total"], "passed": r["passed"]} for r in rows}
+    finally:
+        conn.close()
+
+
+def get_pipeline_status(pipeline_id: str) -> dict:
+    """查詢某 pipeline 下所有任務的狀態統計。"""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT status, COUNT(*) AS cnt
+               FROM tasks WHERE pipeline_id = ? GROUP BY status""",
+            (pipeline_id,),
+        ).fetchall()
+        result = {"total": 0, "pending": 0, "running": 0, "pass": 0,
+                  "fail": 0, "escalated": 0}
+        for r in rows:
+            s = r["status"]
+            if s in result:
+                result[s] = r["cnt"]
+            result["total"] += r["cnt"]
+        return result
+    finally:
+        conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="DAG management and task selection"
@@ -279,10 +336,19 @@ def main():
     nb = sub.add_parser("next-batch", help="Get next batch of ready tasks")
     nb.add_argument("--max", type=int, default=4, dest="max_workers",
                     help="Maximum number of tasks to return")
+    nb.add_argument("--role", type=str, default=None, dest="role_filter",
+                    help="Only return tasks with this role")
 
     # escalate
     esc = sub.add_parser("escalate", help="Mark task as escalated")
     esc.add_argument("task_id", help="Task ID")
+
+    # list-roles
+    sub.add_parser("list-roles", help="Print role distribution")
+
+    # pipeline-status
+    ps = sub.add_parser("pipeline-status", help="Print pipeline status")
+    ps.add_argument("pipeline_id", help="Pipeline ID")
 
     args = parser.parse_args()
 
@@ -317,12 +383,20 @@ def main():
         print(f"Task {args.task_id} → fail (recorded)")
 
     elif args.command == "next-batch":
-        batch = next_batch(args.max_workers)
+        batch = next_batch(args.max_workers, role_filter=args.role_filter)
         print(json.dumps(batch, indent=2, default=str))
 
     elif args.command == "escalate":
         escalate_task(args.task_id)
         print(f"Task {args.task_id} → escalated")
+
+    elif args.command == "list-roles":
+        roles = list_roles()
+        print(json.dumps(roles, indent=2, default=str))
+
+    elif args.command == "pipeline-status":
+        status = get_pipeline_status(args.pipeline_id)
+        print(json.dumps(status, indent=2, default=str))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,13 @@
+{
+  "id": "test-role-task-001",
+  "project": "test-project",
+  "project_dir": "/tmp/test-project",
+  "goal": "測試用任務：驗證角色欄位能被正確匯入與篩選",
+  "verify": "echo ok",
+  "depends_on": [],
+  "touches": ["test-file.py"],
+  "max_attempts": 3,
+  "role": "researcher",
+  "stage": "research",
+  "pipeline_id": "test-pipe-001"
+}

@@ -101,4 +101,14 @@ else
   fi
 fi
 
+# ── Pipeline Advance ───────────────────────────────
+# 檢查所有 active pipeline，推進到下一階段
+ACTIVE_PIPELINES=$(sqlite3 "$DB_PATH" "SELECT id FROM pipelines WHERE status='active';" 2>/dev/null || true)
+if [ -n "$ACTIVE_PIPELINES" ]; then
+  echo "$ACTIVE_PIPELINES" | while IFS= read -r PID; do
+    python3 pipeline.py advance "$PID" 2>&1 || true
+  done
+  echo "[orchestrator] Pipeline advancement complete" >&2
+fi
+
 echo "[orchestrator] Round complete." >&2

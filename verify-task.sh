@@ -49,6 +49,14 @@ cat "$VERIFY_OUTPUT_FILE" >&2
 # ── 4. Handle result ────────────────────────────────────
 if [ "$VERIFY_EXIT" -eq 0 ]; then
   python3 task_picker.py mark-pass "$TASK_ID"
+
+  # After mark-pass, check if task belongs to a pipeline
+  TASK_JSON=$(python3 task_picker.py get "$TASK_ID" 2>/dev/null) || true
+  PIPELINE_ID=$(echo "$TASK_JSON" | jq -r '.pipeline_id // empty' 2>/dev/null) || true
+  if [ -n "$PIPELINE_ID" ]; then
+    python3 pipeline.py advance "$PIPELINE_ID" 2>&1 || true
+  fi
+
   echo "PASS"
 else
   # Record failure with output text

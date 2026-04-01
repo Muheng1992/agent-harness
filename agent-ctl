@@ -142,11 +142,196 @@ def cmd_status(args):
     else:
         print("   (\u7121)")
 
+    # ── Role summary ──
+    role_rows = conn.execute("""
+        SELECT role, COUNT(*) AS cnt FROM tasks
+        WHERE role IS NOT NULL
+        GROUP BY role ORDER BY cnt DESC
+    """).fetchall()
+    if role_rows:
+        print()
+        role_parts = [f"{r['role']}({r['cnt']})" for r in role_rows]
+        print(f"\U0001f464 Roles: {' '.join(role_parts)}")
+
+    # ── Pipeline summary ──
+    try:
+        pipe_stats = conn.execute("""
+            SELECT
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed
+            FROM pipelines
+        """).fetchone()
+        active_p = pipe_stats["active"] or 0
+        completed_p = pipe_stats["completed"] or 0
+        print(f"\U0001f517 Pipelines: {active_p} active, {completed_p} completed")
+    except sqlite3.OperationalError:
+        pass  # pipelines table doesn't exist
+
     print()
     print("\U0001f4c8 \u7d2f\u8a08:")
     print(f"   \u57f7\u884c\u8f2a\u6b21: {total_runs}")
     print(f"   \u6210\u529f\u7387:   {pass_rate}% ({pass_count}/{total_completed})")
     print(f"   \u8017\u6642:     {total_duration:.1f}s")
+
+    conn.close()
+
+
+# ── roles ───────────────────────────────────────────────────────────
+
+def cmd_roles(args):
+    conn = get_connection()
+
+    role_rows = conn.execute("""
+        SELECT role,
+               COUNT(*) AS total,
+               SUM(CASE WHEN status = 'pass' THEN 1 ELSE 0 END) AS pass_cnt,
+               SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_cnt,
+               SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running_cnt,
+               SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fail_cnt,
+               SUM(CASE WHEN status = 'escalated' THEN 1 ELSE 0 END) AS escalated_cnt,
+               SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped_cnt
+        FROM tasks
+        WHERE role IS NOT NULL
+        GROUP BY role
+        ORDER BY total DESC
+    """).fetchall()
+
+    if not role_rows:
+        print("No tasks with roles found.")
+        conn.close()
+        return
+
+    max_total = max(r["total"] for r in role_rows)
+
+    print("Role Distribution:")
+    for r in role_rows:
+        bar_len = int(r["total"] / max_total * 20) if max_total > 0 else 0
+        bar = "\u2588" * bar_len
+
+        # Build detail parts — only include non-zero counts
+        parts = []
+        for label, key in [("pass", "pass_cnt"), ("pending", "pending_cnt"),
+                           ("running", "running_cnt"), ("fail", "fail_cnt"),
+                           ("escalated", "escalated_cnt"), ("skipped", "skipped_cnt")]:
+            if r[key] > 0:
+                parts.append(f"{r[key]} {label}")
+        detail = ", ".join(parts)
+
+        print(f"  {r['role']:15s} {bar:20s}  {r['total']:3d} ({detail})")
+
+    conn.close()
+
+
+# ── pipelines ───────────────────────────────────────────────────────
+
+def cmd_pipelines(args):
+    conn = get_connection()
+
+    try:
+        pipes = conn.execute("""
+            SELECT p.id, p.name, p.project, p.status,
+                   (SELECT COUNT(*) FROM tasks t WHERE t.pipeline_id = p.id) AS total_stages,
+                   (SELECT COUNT(*) FROM tasks t WHERE t.pipeline_id = p.id AND t.status IN ('pass', 'skipped')) AS done_stages
+            FROM pipelines p
+            ORDER BY p.status ASC, p.created_at DESC
+        """).fetchall()
+    except sqlite3.OperationalError:
+        print("No pipelines table found.")
+        conn.close()
+        return
+
+    if not pipes:
+        print("No pipelines found.")
+        conn.close()
+        return
+
+    active = [p for p in pipes if p["status"] in ("active", "paused")]
+    completed = [p for p in pipes if p["status"] not in ("active", "paused")]
+
+    if active:
+        print("Active Pipelines:")
+        for p in active:
+            total = p["total_stages"] or 0
+            done = p["done_stages"] or 0
+            if total > 0:
+                filled = int(done / total * 6)
+                bar = "\u2588" * filled + "\u2591" * (6 - filled)
+                progress = f"[{bar}] {done}/{total} stages"
+            else:
+                progress = "[......] 0/0 stages"
+            print(f"  {p['id']:25s}  {p['name']:18s}  {p['project']:15s}  {progress}")
+
+    if completed:
+        print("Completed Pipelines:" if not active else "\nCompleted Pipelines:")
+        for p in completed:
+            total = p["total_stages"] or 0
+            done = p["done_stages"] or 0
+            status_tag = p["status"]
+            if status_tag == "completed":
+                bar = "\u2588" * 6
+                progress = f"[{bar}] completed"
+            else:
+                filled = int(done / total * 6) if total > 0 else 0
+                bar = "\u2588" * filled + "\u2591" * (6 - filled)
+                progress = f"[{bar}] {status_tag}"
+            print(f"  {p['id']:25s}  {p['name']:18s}  {p['project']:15s}  {progress}")
+
+    conn.close()
+
+
+# ── pipeline (detail) ───────────────────────────────────────────────
+
+def cmd_pipeline_detail(args):
+    conn = get_connection()
+
+    try:
+        pipe = conn.execute(
+            "SELECT * FROM pipelines WHERE id = ?", (args.pipeline_id,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        print("No pipelines table found.", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+
+    if not pipe:
+        print(f"Error: pipeline '{args.pipeline_id}' not found.", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+
+    print(f"Pipeline: {pipe['id']} ({pipe['name']})")
+    print(f"Project: {pipe['project']}")
+    print(f"Status: {pipe['status']}")
+    print()
+
+    stages = conn.execute("""
+        SELECT t.id, t.stage, t.status, t.role, t.assigned_worker
+        FROM tasks t
+        WHERE t.pipeline_id = ?
+        ORDER BY t.created_at ASC
+    """, (args.pipeline_id,)).fetchall()
+
+    if not stages:
+        print("No stages found for this pipeline.")
+        conn.close()
+        return
+
+    print("Stages:")
+    for s in stages:
+        if s["status"] == "pass":
+            icon = "\u2713"
+        elif s["status"] == "running":
+            icon = "\u25cf"
+        elif s["status"] in ("fail", "escalated"):
+            icon = "\u2717"
+        else:
+            icon = "\u25cb"
+
+        stage_name = s["stage"] or s["id"]
+        role = s["role"] or "-"
+        worker_info = ""
+        if s["assigned_worker"] is not None and s["status"] == "running":
+            worker_info = f", worker {s['assigned_worker']}"
+        print(f"  {icon} {stage_name:15s} \u2192 {s['status']:10s} ({role}{worker_info})")
 
     conn.close()
 
@@ -535,6 +720,16 @@ def main():
     p_retry = sub.add_parser("retry", help="Reset and retry a task")
     p_retry.add_argument("task_id", help="Task ID to retry")
 
+    # roles
+    sub.add_parser("roles", help="Show role distribution statistics")
+
+    # pipelines
+    sub.add_parser("pipelines", help="List all pipelines and their status")
+
+    # pipeline <id>
+    p_pipeline = sub.add_parser("pipeline", help="Show detailed status of a pipeline")
+    p_pipeline.add_argument("pipeline_id", help="Pipeline ID to inspect")
+
     # plan
     p_plan = sub.add_parser("plan", help="Auto-decompose a goal into task DAG using Claude")
     p_plan.add_argument("goal", help="Natural language description of what to build")
@@ -556,6 +751,9 @@ def main():
         "kill": cmd_kill,
         "skip": cmd_skip,
         "retry": cmd_retry,
+        "roles": cmd_roles,
+        "pipelines": cmd_pipelines,
+        "pipeline": cmd_pipeline_detail,
         "plan": cmd_plan,
     }
 

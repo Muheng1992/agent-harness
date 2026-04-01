@@ -1,0 +1,10 @@
+{
+  "id": "integration-test",
+  "project": "agent-harness-v2",
+  "project_dir": "/Users/muhengli/dev/agent-harness",
+  "goal": "建立端對端整合測試，驗證整個多角色 pipeline 系統能正確運作。\n\n### 建立測試腳本 `tests/test-roles-pipeline.sh`\n\n測試流程：\n\n1. **初始化測試 DB**\n   ```bash\n   TEST_DB=\"/tmp/agent-harness-test-$$.db\"\n   export AGENT_DB_PATH=\"$TEST_DB\"\n   sqlite3 \"$TEST_DB\" < schema.sql\n   ```\n\n2. **測試角色定義載入**\n   - 確認所有 11 個角色定義檔存在\n   - 確認每個角色定義檔都有 frontmatter（name, allowed_tools）\n   - 確認 researcher 角色有 WebSearch 工具\n   - 確認 reviewer 角色沒有 Write/Edit 工具（只讀）\n\n3. **測試 task_picker 角色支援**\n   - 建立測試 task JSON（含 role 欄位）\n   - 匯入並確認 role 被正確儲存\n   - 測試 list-roles 命令\n   - 測試 next-batch --role 篩選\n\n4. **測試 pipeline 引擎**\n   - 建立測試 pipeline（用 quick-implement 模板）\n   - 確認 tasks 被正確產生（有正確的 role、stage、pipeline_id、depends_on）\n   - 模擬 mark-pass 第一個 stage 的任務\n   - 呼叫 advance，確認下一個 stage 的任務變成 pending\n   - 確認 pipeline status 正確\n\n5. **測試 run-task.sh 角色注入**（乾跑測試）\n   - 確認 run-task.sh 能讀取角色定義檔\n   - 確認 ALLOWED_TOOLS 根據角色正確設定\n   （注意：不實際呼叫 claude，只測試 prompt 組合邏輯）\n\n6. **清理**\n   ```bash\n   rm -f \"$TEST_DB\" /tmp/test-task-*.json\n   ```\n\n每個步驟成功印出 `[PASS] step_name`，失敗印出 `[FAIL] step_name: reason` 並 exit 1。最後印出 `All tests passed!`\n\n### 同時建立 `tests/test-data/` 目錄\n\n放入測試用的 task JSON 範例（含 role 欄位）。\n\n重要：\n- 使用獨立的測試 DB（不影響正式 DB）\n- 測試結束要清理\n- 腳本要能獨立執行（`bash tests/test-roles-pipeline.sh`）",
+  "touches": ["tests/test-roles-pipeline.sh", "tests/test-data/sample-role-task.json"],
+  "verify": "test -f tests/test-roles-pipeline.sh && bash tests/test-roles-pipeline.sh && echo 'PASS: all integration tests passed'",
+  "depends_on": ["update-agent-ctl"],
+  "max_attempts": 5
+}
