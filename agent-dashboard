@@ -1,0 +1,673 @@
+#!/usr/bin/env python3
+"""agent-dashboard — 即時終端儀表板，監控 Agent Harness 所有任務進度。
+
+用法：
+  agent-dashboard              # 啟動即時儀表板
+  agent-dashboard --watch      # 唯讀模式（無鍵盤控制）
+  agent-dashboard --interval 2 # 自訂刷新間隔（秒）
+"""
+
+import argparse
+import os
+import signal
+import sqlite3
+import sys
+import time
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+
+try:
+    from rich.console import Console
+    from rich.layout import Layout
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+    from rich import box
+except ImportError:
+    print("錯誤：需要 rich 套件。請執行：pip3 install rich", file=sys.stderr)
+    sys.exit(1)
+
+# ── 路徑設定 ──────────────────────────────────────────────
+
+DB_PATH = os.environ.get(
+    "AGENT_DB_PATH",
+    str(Path(__file__).resolve().parent / "db" / "agent.db"),
+)
+
+STATUS_ICONS = {
+    "pending": "⏳",
+    "running": "🔄",
+    "pass": "✅",
+    "fail": "❌",
+    "escalated": "🚨",
+    "skipped": "⏭️",
+    "blocked": "⏸️",
+}
+
+STATUS_COLORS = {
+    "pending": "yellow",
+    "running": "cyan",
+    "pass": "green",
+    "fail": "red",
+    "escalated": "bold red",
+    "skipped": "dim",
+    "blocked": "blue",
+}
+
+
+# ── DB 工具 ───────────────────────────────────────────────
+
+def get_connection() -> sqlite3.Connection:
+    if not Path(DB_PATH).exists():
+        return None
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def safe_query(conn, sql, params=()):
+    """安全查詢，忽略 table 不存在等錯誤。"""
+    try:
+        return conn.execute(sql, params).fetchall()
+    except (sqlite3.OperationalError, sqlite3.DatabaseError):
+        return []
+
+
+def safe_query_one(conn, sql, params=()):
+    try:
+        return conn.execute(sql, params).fetchone()
+    except (sqlite3.OperationalError, sqlite3.DatabaseError):
+        return None
+
+
+# ── 即時輸出讀取 ──────────────────────────────────────────
+
+def tail_file(filepath: str, max_lines: int = 3) -> str:
+    """讀取檔案最後 N 行。"""
+    try:
+        p = Path(filepath)
+        if not p.exists() or p.stat().st_size == 0:
+            return ""
+        with open(p, "r", errors="replace") as f:
+            # 快速讀取最後幾 KB
+            try:
+                f.seek(max(0, p.stat().st_size - 4096))
+            except OSError:
+                pass
+            lines = f.readlines()
+            tail = [l.rstrip() for l in lines[-max_lines:] if l.strip()]
+            return "\n".join(tail)
+    except (OSError, PermissionError):
+        return ""
+
+
+def format_elapsed(started_at_str: str) -> str:
+    """計算從 started_at 到現在的時間。"""
+    if not started_at_str:
+        return "?"
+    try:
+        started = datetime.fromisoformat(started_at_str.replace("Z", "+00:00"))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        delta = (now - started).total_seconds()
+        if delta < 60:
+            return f"{delta:.0f}s"
+        elif delta < 3600:
+            return f"{delta/60:.0f}m{delta%60:.0f}s"
+        else:
+            return f"{delta/3600:.0f}h{(delta%3600)/60:.0f}m"
+    except (ValueError, TypeError):
+        return "?"
+
+
+def format_duration(seconds: float) -> str:
+    if seconds is None:
+        return "-"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    elif seconds < 3600:
+        return f"{seconds/60:.0f}m{seconds%60:.0f}s"
+    else:
+        return f"{seconds/3600:.0f}h{(seconds%3600)/60:.0f}m"
+
+
+# ── 面板建構 ──────────────────────────────────────────────
+
+class DashboardState:
+    """儀表板的狀態快照。"""
+
+    def __init__(self):
+        self.global_state = "UNKNOWN"
+        self.counts = {s: 0 for s in STATUS_ICONS}
+        self.running_tasks = []
+        self.recent_events = []
+        self.pending_queue = []
+        self.escalated_tasks = []
+        self.pass_rate = 0.0
+        self.total_runs = 0
+        self.total_duration = 0
+        self.start_time = time.time()
+        self.last_update = None
+        self.selected_worker = None  # 展開的 worker
+        self.spawn_trees = []  # blocked parents + their sub-tasks
+
+    def refresh(self):
+        """從 DB 刷新所有資料。"""
+        conn = get_connection()
+        if conn is None:
+            self.global_state = "NO_DB"
+            return
+
+        try:
+            # 全域狀態
+            row = safe_query_one(conn, "SELECT value FROM control WHERE key = 'global_state'")
+            self.global_state = row["value"].upper() if row else "UNKNOWN"
+
+            # 任務計數
+            for s in STATUS_ICONS:
+                r = safe_query_one(conn, "SELECT COUNT(*) AS cnt FROM tasks WHERE status = ?", (s,))
+                self.counts[s] = r["cnt"] if r else 0
+
+            # 執行中任務
+            self.running_tasks = safe_query(conn, """
+                SELECT t.id, t.project, t.goal, t.attempt_count, t.max_attempts,
+                       t.assigned_worker, t.error_class, t.role,
+                       r.started_at
+                FROM tasks t
+                LEFT JOIN runs r ON r.task_id = t.id AND r.status = 'running'
+                WHERE t.status = 'running'
+                ORDER BY t.assigned_worker
+            """)
+
+            # 最近事件（最近完成的 runs）
+            self.recent_events = safe_query(conn, """
+                SELECT r.task_id, r.status, r.error_class, r.duration_sec,
+                       r.finished_at, t.project
+                FROM runs r
+                JOIN tasks t ON t.id = r.task_id
+                WHERE r.finished_at IS NOT NULL
+                ORDER BY r.finished_at DESC
+                LIMIT 8
+            """)
+
+            # 等待中的任務（含依賴資訊）
+            self.pending_queue = safe_query(conn, """
+                SELECT id, project, goal, depends_on, role
+                FROM tasks
+                WHERE status = 'pending'
+                ORDER BY created_at ASC
+                LIMIT 10
+            """)
+
+            # 升級任務
+            self.escalated_tasks = safe_query(conn, """
+                SELECT id, project, goal, max_attempts, error_class, last_error
+                FROM tasks
+                WHERE status = 'escalated'
+                ORDER BY updated_at DESC
+            """)
+
+            # Sub-task 樹（blocked parents + 有 spawned_by 的任務）
+            self.spawn_trees = []
+            blocked_parents = safe_query(conn, """
+                SELECT id, project, goal, status
+                FROM tasks
+                WHERE status = 'blocked'
+                   OR id IN (SELECT DISTINCT spawned_by FROM tasks WHERE spawned_by IS NOT NULL)
+                ORDER BY created_at ASC
+            """)
+            for parent in blocked_parents:
+                children = safe_query(conn, """
+                    SELECT id, status, goal, attempt_count, max_attempts, role,
+                           depends_on, assigned_worker
+                    FROM tasks
+                    WHERE spawned_by = ?
+                    ORDER BY created_at ASC
+                """, (parent["id"],))
+                if children:
+                    self.spawn_trees.append({
+                        "parent": parent,
+                        "children": children,
+                    })
+
+            # 統計
+            stats = safe_query_one(conn, """
+                SELECT
+                    COUNT(*) AS total_runs,
+                    SUM(CASE WHEN status = 'pass' THEN 1 ELSE 0 END) AS pass_count,
+                    SUM(CASE WHEN status IN ('pass', 'fail', 'error') THEN 1 ELSE 0 END) AS completed,
+                    COALESCE(SUM(duration_sec), 0) AS total_duration
+                FROM runs
+            """)
+            if stats:
+                self.total_runs = stats["total_runs"] or 0
+                completed = stats["completed"] or 0
+                pass_count = stats["pass_count"] or 0
+                self.pass_rate = round(pass_count / completed * 100, 1) if completed > 0 else 0
+                self.total_duration = stats["total_duration"] or 0
+
+            self.last_update = datetime.now()
+        finally:
+            conn.close()
+
+
+def build_header(state: DashboardState) -> Panel:
+    """建構頂部狀態列。"""
+    elapsed = time.time() - state.start_time
+
+    # 狀態顏色
+    state_color = {
+        "RUNNING": "bold green",
+        "PAUSED": "bold yellow",
+        "STOPPED": "bold red",
+        "NO_DB": "bold red",
+        "UNKNOWN": "dim",
+    }.get(state.global_state, "white")
+
+    header = Text()
+    header.append("  State: ", style="bold")
+    header.append(state.global_state, style=state_color)
+    header.append("  │  ", style="dim")
+    header.append(f"Elapsed: {format_duration(elapsed)}", style="bold")
+    header.append("  │  ", style="dim")
+    header.append(f"Pass Rate: {state.pass_rate}%", style="bold green" if state.pass_rate >= 80 else "bold yellow")
+    header.append("  │  ", style="dim")
+    header.append(f"Runs: {state.total_runs}", style="bold")
+    header.append("  │  ", style="dim")
+    header.append(f"Duration: {format_duration(state.total_duration)}", style="bold")
+
+    header.append("\n  ")
+    for status, icon in STATUS_ICONS.items():
+        count = state.counts[status]
+        color = STATUS_COLORS[status]
+        header.append(f"{icon} {count} {status}", style=color)
+        header.append("  ")
+
+    return Panel(
+        header,
+        title="[bold white]Agent Harness Dashboard[/]",
+        border_style="bright_blue",
+        box=box.DOUBLE,
+    )
+
+
+def build_running_panel(state: DashboardState) -> Panel:
+    """建構執行中任務面板。"""
+    if not state.running_tasks:
+        content = Text("  (無執行中的任務)", style="dim")
+        return Panel(content, title="[bold cyan]🔄 Running Agents[/]", border_style="cyan", box=box.ROUNDED)
+
+    table = Table(box=None, show_header=True, header_style="bold", pad_edge=False, expand=True)
+    table.add_column("W", width=3, justify="center")
+    table.add_column("Task", min_width=15, ratio=2)
+    table.add_column("Role", width=12)
+    table.add_column("Attempt", width=8, justify="center")
+    table.add_column("Elapsed", width=8, justify="right")
+    table.add_column("Live Output", ratio=3, no_wrap=True)
+
+    for t in state.running_tasks:
+        worker = str(t["assigned_worker"]) if t["assigned_worker"] is not None else "?"
+        task_label = f"{t['project']}/{t['id']}"
+        role = t["role"] or "impl"
+        attempt = f"{t['attempt_count']}/{t['max_attempts']}"
+        elapsed = format_elapsed(t["started_at"])
+
+        # 讀取即時輸出
+        output_file = f"/tmp/claude-out-{t['id']}.txt"
+        live_out = tail_file(output_file, max_lines=1)
+        if live_out:
+            # 截取最後一行，限長
+            live_out = live_out.split("\n")[-1][:80]
+        else:
+            live_out = "(等待輸出...)"
+
+        attempt_style = "red" if t["attempt_count"] >= t["max_attempts"] - 1 else "white"
+
+        table.add_row(
+            Text(worker, style="bold cyan"),
+            Text(task_label, style="bold"),
+            Text(role, style="magenta"),
+            Text(attempt, style=attempt_style),
+            Text(elapsed, style="yellow"),
+            Text(f"▸ {live_out}", style="dim"),
+        )
+
+    return Panel(table, title="[bold cyan]🔄 Running Agents[/]", border_style="cyan", box=box.ROUNDED)
+
+
+def build_events_panel(state: DashboardState) -> Panel:
+    """建構最近事件面板。"""
+    if not state.recent_events:
+        content = Text("  (尚無完成的事件)", style="dim")
+        return Panel(content, title="[bold white]📋 Recent Events[/]", border_style="white", box=box.ROUNDED)
+
+    table = Table(box=None, show_header=False, pad_edge=False, expand=True)
+    table.add_column("Time", width=10)
+    table.add_column("Icon", width=3)
+    table.add_column("Task", ratio=2)
+    table.add_column("Result", width=14)
+    table.add_column("Duration", width=8, justify="right")
+
+    for e in state.recent_events:
+        icon = STATUS_ICONS.get(e["status"], "?")
+        color = STATUS_COLORS.get(e["status"], "white")
+
+        finished = e["finished_at"] or ""
+        if finished:
+            try:
+                dt = datetime.fromisoformat(finished)
+                time_str = dt.strftime("%H:%M:%S")
+            except ValueError:
+                time_str = finished[:8]
+        else:
+            time_str = ""
+
+        error_info = e["error_class"] or ""
+        result = e["status"]
+        if error_info and e["status"] != "pass":
+            result = f"{e['status']}:{error_info}"
+
+        duration = format_duration(e["duration_sec"])
+
+        table.add_row(
+            Text(time_str, style="dim"),
+            Text(icon),
+            Text(f"{e['project']}/{e['task_id']}", style="bold"),
+            Text(result, style=color),
+            Text(duration, style="dim"),
+        )
+
+    return Panel(table, title="[bold white]📋 Recent Events[/]", border_style="white", box=box.ROUNDED)
+
+
+def build_pending_panel(state: DashboardState) -> Panel:
+    """建構等待中任務面板。"""
+    if not state.pending_queue:
+        content = Text("  (無等待中任務)", style="dim")
+        return Panel(content, title="[bold yellow]⏳ Pending Queue[/]", border_style="yellow", box=box.ROUNDED)
+
+    import json
+
+    table = Table(box=None, show_header=False, pad_edge=False, expand=True)
+    table.add_column("Task", ratio=2)
+    table.add_column("Role", width=12)
+    table.add_column("Waiting For", ratio=2)
+
+    for t in state.pending_queue:
+        deps_raw = t["depends_on"] or "[]"
+        try:
+            deps = json.loads(deps_raw)
+        except (json.JSONDecodeError, TypeError):
+            deps = []
+
+        dep_str = ", ".join(deps) if deps else "(就緒)"
+        dep_style = "dim" if not deps else "yellow"
+
+        table.add_row(
+            Text(f"{t['project']}/{t['id']}", style="bold"),
+            Text(t["role"] or "impl", style="magenta"),
+            Text(f"← {dep_str}", style=dep_style),
+        )
+
+    return Panel(table, title="[bold yellow]⏳ Pending Queue[/]", border_style="yellow", box=box.ROUNDED)
+
+
+def build_escalated_panel(state: DashboardState) -> Panel:
+    """建構升級任務面板。"""
+    if not state.escalated_tasks:
+        return Panel(
+            Text("  (無升級任務) 🎉", style="dim green"),
+            title="[bold red]🚨 Escalated[/]",
+            border_style="red",
+            box=box.ROUNDED,
+        )
+
+    table = Table(box=None, show_header=False, pad_edge=False, expand=True)
+    table.add_column("Task", ratio=2)
+    table.add_column("Attempts", width=10)
+    table.add_column("Error", ratio=2)
+    table.add_column("Last Error", ratio=3, no_wrap=True)
+
+    for t in state.escalated_tasks:
+        last_err = (t["last_error"] or "")[:60]
+        table.add_row(
+            Text(f"{t['project']}/{t['id']}", style="bold red"),
+            Text(f"{t['max_attempts']} failed", style="red"),
+            Text(t["error_class"] or "unknown", style="yellow"),
+            Text(last_err, style="dim"),
+        )
+
+    return Panel(table, title="[bold red]🚨 Escalated[/]", border_style="red", box=box.ROUNDED)
+
+
+def build_spawn_tree_panel(state: DashboardState) -> Panel:
+    """建構 Sub-task 樹狀結構面板。"""
+    if not state.spawn_trees:
+        content = Text("  (無子任務)", style="dim")
+        return Panel(content, title="[bold blue]🌳 Sub-task Trees[/]", border_style="blue", box=box.ROUNDED)
+
+    lines = Text()
+
+    for tree in state.spawn_trees[:5]:  # 最多顯示 5 棵樹
+        parent = tree["parent"]
+        children = tree["children"]
+        p_icon = STATUS_ICONS.get(parent["status"], "?")
+        p_color = STATUS_COLORS.get(parent["status"], "white")
+
+        # 統計子任務狀態
+        child_pass = sum(1 for c in children if c["status"] == "pass")
+        child_total = len(children)
+
+        lines.append(f" {p_icon} ", style=p_color)
+        lines.append(f"{parent['id']}", style=f"bold {p_color}")
+        lines.append(f" ({child_pass}/{child_total} done)\n", style="dim")
+
+        for i, child in enumerate(children):
+            is_last = (i == len(children) - 1)
+            branch = "└── " if is_last else "├── "
+            c_icon = STATUS_ICONS.get(child["status"], "?")
+            c_color = STATUS_COLORS.get(child["status"], "white")
+
+            lines.append(f"   {branch}", style="dim")
+            lines.append(f"{c_icon} ", style=c_color)
+            lines.append(f"{child['id']}", style=c_color)
+
+            # 額外資訊
+            extra = []
+            if child["role"] and child["role"] != "implementer":
+                extra.append(child["role"])
+            if child["status"] == "running":
+                extra.append(f"W{child['assigned_worker'] or '?'}")
+            if child["status"] == "fail":
+                extra.append(f"{child['attempt_count']}/{child['max_attempts']}")
+
+            if extra:
+                lines.append(f" ({', '.join(extra)})", style="dim")
+            lines.append("\n")
+
+        if tree != state.spawn_trees[-1]:
+            lines.append("\n")
+
+    return Panel(lines, title="[bold blue]🌳 Sub-task Trees[/]", border_style="blue", box=box.ROUNDED)
+
+
+def build_help_bar() -> Text:
+    """建構底部快捷鍵列。"""
+    help_text = Text()
+    help_text.append("  q", style="bold cyan")
+    help_text.append(" 退出  ", style="dim")
+    help_text.append("p", style="bold cyan")
+    help_text.append(" 暫停/恢復  ", style="dim")
+    help_text.append("r", style="bold cyan")
+    help_text.append(" 刷新  ", style="dim")
+    help_text.append("Ctrl+C", style="bold cyan")
+    help_text.append(" 退出", style="dim")
+    return help_text
+
+
+# ── 主畫面組合 ────────────────────────────────────────────
+
+def build_dashboard(state: DashboardState) -> Layout:
+    """組合所有面板為完整 dashboard。"""
+    layout = Layout()
+
+    layout.split_column(
+        Layout(name="header", size=5),
+        Layout(name="body"),
+        Layout(name="footer", size=1),
+    )
+
+    # Body 分為左右兩欄
+    layout["body"].split_row(
+        Layout(name="left", ratio=3),
+        Layout(name="right", ratio=2),
+    )
+
+    # 左欄：running + events
+    layout["left"].split_column(
+        Layout(name="running", ratio=2),
+        Layout(name="events", ratio=2),
+    )
+
+    # 右欄：pending + spawn tree + escalated
+    layout["right"].split_column(
+        Layout(name="pending", ratio=2),
+        Layout(name="spawn_tree", ratio=2),
+        Layout(name="escalated", ratio=1),
+    )
+
+    layout["header"].update(build_header(state))
+    layout["running"].update(build_running_panel(state))
+    layout["events"].update(build_events_panel(state))
+    layout["pending"].update(build_pending_panel(state))
+    layout["spawn_tree"].update(build_spawn_tree_panel(state))
+    layout["escalated"].update(build_escalated_panel(state))
+    layout["footer"].update(build_help_bar())
+
+    return layout
+
+
+# ── 鍵盤輸入處理 ──────────────────────────────────────────
+
+def handle_keyboard(state: DashboardState, watch_only: bool):
+    """在背景線程中監聽鍵盤輸入。回傳 True 表示要退出。"""
+    import select
+    import termios
+    import tty
+
+    old_settings = termios.tcgetattr(sys.stdin)
+    try:
+        tty.setcbreak(sys.stdin.fileno())
+        while True:
+            if select.select([sys.stdin], [], [], 0.1)[0]:
+                ch = sys.stdin.read(1)
+                if ch == "q":
+                    return True
+                if watch_only:
+                    continue
+                if ch == "p":
+                    # 切換暫停/恢復
+                    conn = get_connection()
+                    if conn:
+                        row = safe_query_one(conn, "SELECT value FROM control WHERE key = 'global_state'")
+                        current = row["value"] if row else "running"
+                        new_state = "paused" if current == "running" else "running"
+                        conn.execute(
+                            "UPDATE control SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'global_state'",
+                            (new_state,),
+                        )
+                        conn.commit()
+                        conn.close()
+    except (termios.error, OSError):
+        pass
+    finally:
+        try:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        except termios.error:
+            pass
+    return False
+
+
+# ── 主程式 ────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="agent-dashboard",
+        description="即時終端儀表板，監控 Agent Harness 所有任務進度",
+    )
+    parser.add_argument("--watch", action="store_true", help="唯讀模式（無鍵盤控制）")
+    parser.add_argument("--interval", type=float, default=1.0, help="刷新間隔（秒，預設 1.0）")
+    parser.add_argument("--snapshot", action="store_true", help="輸出 JSON 狀態快照後退出（測試用）")
+    parser.add_argument("--snapshot-render", action="store_true", help="渲染一次畫面後退出（測試用）")
+    args = parser.parse_args()
+
+    console = Console()
+    state = DashboardState()
+
+    # 首次刷新
+    state.refresh()
+
+    # snapshot 模式：輸出 JSON 後退出
+    if args.snapshot:
+        import json as _json
+        snapshot = {
+            "global_state": state.global_state,
+            "counts": state.counts,
+            "running_tasks": len(state.running_tasks),
+            "pending_queue": len(state.pending_queue),
+            "escalated_tasks": len(state.escalated_tasks),
+            "recent_events": len(state.recent_events),
+            "pass_rate": state.pass_rate,
+            "total_runs": state.total_runs,
+            "spawn_trees": len(state.spawn_trees),
+        }
+        print(_json.dumps(snapshot, ensure_ascii=False))
+        return
+
+    # snapshot-render 模式：渲染一次畫面後退出
+    if args.snapshot_render:
+        layout = build_dashboard(state)
+        console.print(layout)
+        return
+
+    # 鍵盤監聽線程
+    should_quit = threading.Event()
+
+    def keyboard_thread():
+        try:
+            if handle_keyboard(state, args.watch):
+                should_quit.set()
+        except Exception:
+            pass
+
+    # 只在 tty 環境下啟動鍵盤監聽
+    if sys.stdin.isatty():
+        kb_thread = threading.Thread(target=keyboard_thread, daemon=True)
+        kb_thread.start()
+
+    # 優雅退出
+    def signal_handler(sig, frame):
+        should_quit.set()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    try:
+        with Live(build_dashboard(state), console=console, refresh_per_second=2, screen=True) as live:
+            while not should_quit.is_set():
+                time.sleep(args.interval)
+                state.refresh()
+                live.update(build_dashboard(state))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        console.print("\n[dim]Dashboard 已關閉。[/]")
+
+
+if __name__ == "__main__":
+    main()

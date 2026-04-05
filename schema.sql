@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   depends_on    TEXT DEFAULT '[]',   -- JSON array of task IDs
   touches       TEXT DEFAULT '[]',   -- JSON array of file paths
   status        TEXT DEFAULT 'pending'
-                CHECK(status IN ('pending','running','pass','fail','escalated','skipped')),
+                CHECK(status IN ('pending','running','pass','fail','escalated','skipped','blocked')),
   attempt_count INTEGER DEFAULT 0,
   max_attempts  INTEGER DEFAULT 5,
   assigned_worker INTEGER,

@@ -51,15 +51,29 @@ sqlite3 db/agent.db < schema.sql
 echo "  ✅ db/agent.db created"
 
 # ── 4. Make scripts executable ──────────────────────────
-chmod +x orchestrator.sh parallel-orchestrator.sh loop-orchestrator.sh run-task.sh verify-task.sh setup-worktrees.sh notify.sh agent-ctl
+chmod +x orchestrator.sh parallel-orchestrator.sh loop-orchestrator.sh run-task.sh verify-task.sh setup-worktrees.sh notify.sh agent-ctl agent-dashboard
 echo "  ✅ Scripts made executable"
 
-# ── 5. Create symlink ──────────────────────────────────
+# ── 5. Install Python dependencies ────────────────────
+echo "Installing Python dependencies..."
+if python3 -c "import rich" 2>/dev/null; then
+  echo "  ✅ rich already installed"
+else
+  pip3 install --break-system-packages rich 2>/dev/null \
+    || pip3 install --user rich 2>/dev/null \
+    || pip3 install rich 2>/dev/null \
+    || echo "  ⚠️  Failed to install rich — agent-dashboard won't work. Run: pip3 install rich"
+  echo "  ✅ rich installed"
+fi
+
+# ── 6. Create symlinks ────────────────────────────────
 mkdir -p "$BIN_DIR"
 ln -sf "$INSTALL_DIR/agent-ctl" "$BIN_DIR/agent-ctl"
+ln -sf "$INSTALL_DIR/agent-dashboard" "$BIN_DIR/agent-dashboard"
 echo "  ✅ agent-ctl linked to $BIN_DIR/agent-ctl"
+echo "  ✅ agent-dashboard linked to $BIN_DIR/agent-dashboard"
 
-# ── 6. Check PATH ──────────────────────────────────────
+# ── 7. Check PATH ──────────────────────────────────────
 if ! echo "$PATH" | tr ':' '\n' | grep -q "$BIN_DIR"; then
   echo ""
   echo "⚠️  $BIN_DIR is not in your PATH."
@@ -69,7 +83,7 @@ if ! echo "$PATH" | tr ':' '\n' | grep -q "$BIN_DIR"; then
   echo ""
 fi
 
-# ── 7. Install Claude Code skill ───────────────────────
+# ── 8. Install Claude Code skills ──────────────────────
 COMMANDS_DIR="$HOME/.claude/commands"
 mkdir -p "$COMMANDS_DIR"
 
@@ -215,6 +229,9 @@ cd __HARNESS_HOME__ && bash orchestrator.sh
 # 或並行跑一輪
 cd __HARNESS_HOME__ && bash parallel-orchestrator.sh
 
+# 即時儀表板（另開終端）
+__HARNESS_HOME__/agent-dashboard
+
 # 或用 agent-ctl 看狀態
 agent-ctl status
 ```
@@ -231,19 +248,98 @@ SKILL_EOF
 
 echo "  ✅ /harness skill installed to $COMMANDS_DIR/harness.md"
 
-# ── 8. Install bootstrap skill ───────────────────────────
+# Write /dashboard skill
+sed "s|__HARNESS_HOME__|${INSTALL_DIR}|g" > "$COMMANDS_DIR/agent-dashboard.md" << 'DASHBOARD_SKILL_EOF'
+**Purpose**: 開啟 Agent Harness 即時儀表板或查看任務進度
+
+---
+
+## 你是 Agent Harness 的儀表板控制器
+
+使用者想查看 agent 執行進度。根據 `$ARGUMENTS` 決定動作：
+
+### 預設行為（無參數或 "open"）
+
+在終端開啟即時 TUI 儀表板：
+
+```bash
+__HARNESS_HOME__/agent-dashboard
+```
+
+告訴使用者按 `q` 退出、`p` 暫停/恢復。
+
+### "status" — 快速狀態
+
+顯示一次性狀態快照（不開 TUI）：
+
+```bash
+__HARNESS_HOME__/agent-ctl status
+```
+
+### "snapshot" — JSON 快照
+
+取得結構化 JSON 狀態（適合程式讀取）：
+
+```bash
+__HARNESS_HOME__/agent-dashboard --snapshot
+```
+
+解析 JSON 回覆使用者。
+
+### "render" — 渲染一次畫面
+
+單次渲染 dashboard（不進入 live 模式）：
+
+```bash
+__HARNESS_HOME__/agent-dashboard --snapshot-render
+```
+
+### "tasks" — 任務列表
+
+```bash
+__HARNESS_HOME__/agent-ctl tasks
+```
+
+### "logs TASK_ID" — 查看某任務的執行歷史
+
+```bash
+__HARNESS_HOME__/agent-ctl logs TASK_ID
+```
+
+### "pause" / "resume" / "stop" — 控制 orchestrator
+
+```bash
+__HARNESS_HOME__/agent-ctl pause
+__HARNESS_HOME__/agent-ctl resume
+__HARNESS_HOME__/agent-ctl stop
+```
+
+## 注意
+
+- 如果使用者只是想看進度，用 `--snapshot` 或 `status` 即可回報
+- 如果使用者想開持續監控，告訴他在另一個終端跑 `agent-dashboard` 或 `__HARNESS_HOME__/agent-dashboard`
+- 如果 DB 不存在，先初始化：`sqlite3 __HARNESS_HOME__/db/agent.db < __HARNESS_HOME__/schema.sql`
+- 這個 skill 在任何目錄都可以用
+DASHBOARD_SKILL_EOF
+
+echo "  ✅ /agent-dashboard skill installed to $COMMANDS_DIR/agent-dashboard.md"
+
+# ── 9. Install bootstrap skill ───────────────────────────
 cp "$INSTALL_DIR/install-harness.md" "$COMMANDS_DIR/install-harness.md"
 echo "  ✅ /install-harness skill installed to $COMMANDS_DIR/install-harness.md"
 
-# ── 9. Done ─────────────────────────────────────────────
+# ── 10. Done ───────────────────────────────────────────
 echo ""
 echo "🎉 Agent Harness installed successfully!"
 echo ""
 echo "Quick start:"
 echo "  agent-ctl status                    # Check status"
+echo "  agent-dashboard                     # Real-time TUI dashboard"
 echo "  agent-ctl plan 'build a todo API' \\"
 echo "    --project todo -d ~/projects/todo  # Auto-plan tasks"
 echo ""
 echo "Or in Claude Code:"
 echo "  /harness build a REST API with Express in this project"
+echo "  /agent-dashboard                    # Open real-time dashboard"
+echo "  /agent-dashboard status             # Quick status check"
 echo ""

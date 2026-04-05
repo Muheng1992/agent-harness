@@ -98,7 +98,16 @@ for TASK_ID in $TASK_IDS; do
 
     if [ "$RUN_EXIT" -eq 0 ]; then
       # Verify
-      bash "$SCRIPT_DIR/verify-task.sh" "$TASK_ID" || true
+      VERIFY_OUT=""
+      VERIFY_OUT=$(bash "$SCRIPT_DIR/verify-task.sh" "$TASK_ID" 2>&1) || true
+      # AI 評審員（只在 verify pass 時執行）
+      if echo "$VERIFY_OUT" | grep -q "PASS"; then
+        EVAL_OUT=""
+        EVAL_OUT=$(bash "$SCRIPT_DIR/evaluate-task.sh" "$TASK_ID" 2>&1) || true
+        if echo "$EVAL_OUT" | grep -q "REQUEST_CHANGES"; then
+          python3 "$SCRIPT_DIR/task_picker.py" record-failure "$TASK_ID" "EVALUATOR: $EVAL_OUT" || true
+        fi
+      fi
     else
       echo "[worker-${WORKER_IDX}] run-task failed for $TASK_ID" >&2
     fi

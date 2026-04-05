@@ -36,6 +36,8 @@ def classify_error(failure_text: str) -> tuple:
     """
     text_lower = failure_text.lower()
 
+    if "evaluator:" in text_lower or "request_changes" in text_lower:
+        return "evaluator_reject", "evaluator_reject"
     if "429" in text_lower or "rate limit" in text_lower:
         return "rate_limit", "rate_limit"
     if "merge conflict" in text_lower:
@@ -75,6 +77,51 @@ def decide_action(
         )
 
     tail = failure_text[-2000:] if len(failure_text) > 2000 else failure_text
+
+    if error_class == "looping":
+        # 策略輪替：根據嘗試次數選擇不同策略
+        strategy_index = attempt_count % 3
+        if strategy_index == 0:
+            # 策略 1：切換角色（implementer → debugger）
+            return {
+                "action": "retry_with_role_switch",
+                "new_role": "debugger",
+                "extra_prompt": (
+                    "前幾次嘗試都產出相同的結果，表示方法有根本性問題。"
+                    "請用除錯專家的思維，先分析根因再嘗試完全不同的實作方式。\n"
+                    + tail
+                ),
+                "cooldown_sec": 0,
+            }
+        elif strategy_index == 1:
+            # 策略 2：強制不同方法
+            return {
+                "action": "retry_with_context",
+                "extra_prompt": (
+                    "嚴禁使用與之前相同的方法。列出 3 種完全不同的替代方案，"
+                    "選擇最可行的一種實施。先前失敗的嘗試：\n"
+                    + tail
+                ),
+                "cooldown_sec": 0,
+            }
+        else:
+            # 策略 3：生成研究子任務
+            return {
+                "action": "spawn_research",
+                "extra_prompt": "反覆失敗，需要先研究問題再重試。",
+                "cooldown_sec": 0,
+            }
+
+    if error_class == "evaluator_reject":
+        return {
+            "action": "retry_with_context",
+            "extra_prompt": (
+                root_cause_prefix
+                + "AI 評審員要求修改。以下是具體問題：\n"
+                + tail
+            ),
+            "cooldown_sec": 0,
+        }
 
     if error_class == "rate_limit":
         return {
@@ -148,7 +195,12 @@ def heal(task_id: str, failure_file: str) -> dict:
         attempt_count = task["attempt_count"]
         max_attempts = task["max_attempts"]
 
-        error_class, _ = classify_error(failure_text)
+        # 先檢查 watchdog 是否已標記為 looping（優先於文字分類）
+        current_error_class = task["error_class"]
+        if current_error_class == "looping":
+            error_class = "looping"
+        else:
+            error_class, _ = classify_error(failure_text)
         action = decide_action(error_class, failure_text, attempt_count, max_attempts)
 
         # Update error_class in the database

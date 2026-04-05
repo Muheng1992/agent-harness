@@ -59,8 +59,18 @@ echo "[run-task] Role: $ROLE | Tools: $CLAUDE_TOOLS" >&2
 # ── 2. Read memory context ──────────────────────────────
 MEMORY_CONTEXT=$(python3 memory.py read "$TASK_ID" 2>/dev/null) || MEMORY_CONTEXT=""
 
+# ── 2b. Read upstream context (前置任務產出 + 祖先決策) ──
+UPSTREAM_CONTEXT=$(python3 memory.py read-upstream "$TASK_ID" 2>/dev/null) || UPSTREAM_CONTEXT=""
+
+# ── 2c. Read project brief (所有已完成任務的共享 context) ──
+PROJECT_BRIEF=$(python3 memory.py read-brief "$TASK_ID" 2>/dev/null) || PROJECT_BRIEF=""
+
+# ── 2d. Read spawn context (如果是被父任務 spawn 的子任務) ──
+SPAWN_CONTEXT=$(python3 memory.py read-spawn-context "$TASK_ID" 2>/dev/null) || SPAWN_CONTEXT=""
+
 # ── 3. Check for previous errors (heal prompt) ──────────
 ERROR_HISTORY=$(echo "$TASK_JSON" | jq -r '.last_error // empty')
+ERROR_CLASS=$(echo "$TASK_JSON" | jq -r '.error_class // empty')
 HEAL_PROMPT=""
 if [ -n "$ERROR_HISTORY" ]; then
   HEAL_PROMPT="
@@ -71,6 +81,15 @@ ${ERROR_HISTORY}
 Analyze the error and try a different approach. Do NOT repeat the same mistake."
 fi
 
+# 迴圈偵測：注入更強的強制指令
+if [ "$ERROR_CLASS" = "looping" ]; then
+  HEAL_PROMPT="${HEAL_PROMPT}
+
+CRITICAL: 此任務已被偵測為循環卡住（連續產出相同結果）。
+你必須使用完全不同的方法。禁止重複任何先前嘗試的方法。
+先列出你打算採用的新方法，再開始實作。"
+fi
+
 # ── 4. Build prompt ─────────────────────────────────────
 PROMPT="${ROLE_PROMPT:+${ROLE_PROMPT}
 
@@ -78,15 +97,55 @@ PROMPT="${ROLE_PROMPT:+${ROLE_PROMPT}
 
 TASK: ${GOAL}
 
-${MEMORY_CONTEXT:+CONTEXT FROM PREVIOUS WORK:
+${PROJECT_BRIEF:+PROJECT BRIEF (shared context from all completed tasks in this project — key interfaces and decisions):
+${PROJECT_BRIEF}
+}${UPSTREAM_CONTEXT:+UPSTREAM TASKS OUTPUT (what your direct dependencies actually created — READ these files before coding):
+${UPSTREAM_CONTEXT}
+}${SPAWN_CONTEXT:+PARENT TASK CONTEXT (detailed analysis from the task that spawned you):
+${SPAWN_CONTEXT}
+}${MEMORY_CONTEXT:+CONTEXT FROM YOUR PREVIOUS ATTEMPTS ON THIS TASK:
 ${MEMORY_CONTEXT}
 }${HEAL_PROMPT}
 
 INSTRUCTIONS:
 - Complete the task fully and correctly.
 - Work in the current directory.
+- IMPORTANT: Before writing code, READ the files listed in UPSTREAM TASKS OUTPUT and PROJECT BRIEF to understand actual interfaces, naming, and structure. Do NOT assume — verify by reading.
 - Do not ask questions; make reasonable decisions.
-- When done, output a brief summary of what you did."
+
+SUB-TASK SPAWNING:
+If this task is too large for a single session (5+ files across multiple modules, or clearly separable concerns), you can decompose it:
+
+1. Analyze the codebase first to understand the full scope
+2. Write a context file with your analysis:
+   cat > /tmp/spawn-context-${TASK_ID}.md << 'CTXEOF'
+   <your detailed analysis, interface contracts, architecture notes>
+   CTXEOF
+3. Spawn sub-tasks:
+   python3 ${SCRIPT_DIR}/task_picker.py spawn-subtasks \\
+     --parent ${TASK_ID} \\
+     --context-file /tmp/spawn-context-${TASK_ID}.md \\
+     --subtasks '[{\"id\":\"${TASK_ID}-sub-1\",\"goal\":\"...\",\"verify\":\"...\",\"touches\":[\"...\"]},{\"id\":\"${TASK_ID}-sub-2\",\"goal\":\"...\",\"depends_on\":[\"${TASK_ID}-sub-1\"]}]'
+4. After spawning, STOP working. Output your handoff manifest noting you spawned sub-tasks.
+
+WHEN TO SPAWN vs JUST DO IT:
+- DO IT if: < 4 files, single coherent change
+- SPAWN if: 5+ independent modules, clearly separable concerns
+- NEVER spawn for trivial tasks — spawning has overhead
+
+HANDOFF OUTPUT:
+When done (whether you completed the work or spawned sub-tasks), output:
+
+\`\`\`json
+{
+  \"created_files\": [\"path/to/file1\", \"path/to/file2\"],
+  \"interfaces\": [\"protocol Foo: func bar() -> String\"],
+  \"decisions\": [\"Used X instead of Y because Z\"],
+  \"notes\": \"Context for downstream tasks\"
+}
+\`\`\`
+
+Then a brief markdown summary."
 
 # ── 5. Mark task as running ──────────────────────────────
 python3 task_picker.py mark-running "$TASK_ID" "$WORKER_ID"
@@ -138,5 +197,13 @@ if [ "$CLAUDE_EXIT" -ne 0 ]; then
   python3 task_picker.py record-failure "$TASK_ID" "$FAILURE_TEXT"
   exit 1
 fi
+
+# ── 10. Extract and save handoff manifest ─────────────
+# 從 Claude output 中提取結構化 handoff manifest 供下游任務使用
+python3 memory.py extract-handoff "$TASK_ID" "$OUTPUT_FILE" 2>/dev/null || true
+
+# ── 11. Update project brief ──────────────────────────
+# 把這個任務的介面和決策追加到 project brief（並行任務共享）
+python3 memory.py update-brief "$TASK_ID" 2>/dev/null || true
 
 echo "[run-task] Task $TASK_ID execution complete." >&2

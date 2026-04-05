@@ -683,6 +683,31 @@ def cmd_plan(args):
     print(f"   bash parallel-orchestrator.sh  # 並行")
 
 
+# ── dashboard ───────────────────────────────────────────────────────
+
+def cmd_dashboard(args):
+    """啟動即時 TUI 儀表板。"""
+    import subprocess
+    dashboard_path = HARNESS_ROOT / "agent-dashboard"
+    if not dashboard_path.exists():
+        print(f"Error: agent-dashboard not found at {dashboard_path}", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = [str(dashboard_path)]
+    if args.watch:
+        cmd.append("--watch")
+    if args.interval:
+        cmd.extend(["--interval", str(args.interval)])
+
+    try:
+        subprocess.run(cmd, check=True)
+    except FileNotFoundError:
+        print("Error: python3 not found.", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        pass
+
+
 # ── main ─────────────────────────────────────────────────────────────
 
 def main():
@@ -730,6 +755,11 @@ def main():
     p_pipeline = sub.add_parser("pipeline", help="Show detailed status of a pipeline")
     p_pipeline.add_argument("pipeline_id", help="Pipeline ID to inspect")
 
+    # dashboard
+    p_dash = sub.add_parser("dashboard", help="Launch real-time TUI dashboard")
+    p_dash.add_argument("--watch", action="store_true", help="Read-only mode (no keyboard control)")
+    p_dash.add_argument("--interval", type=float, default=None, help="Refresh interval in seconds")
+
     # plan
     p_plan = sub.add_parser("plan", help="Auto-decompose a goal into task DAG using Claude")
     p_plan.add_argument("goal", help="Natural language description of what to build")
@@ -755,6 +785,7 @@ def main():
         "pipelines": cmd_pipelines,
         "pipeline": cmd_pipeline_detail,
         "plan": cmd_plan,
+        "dashboard": cmd_dashboard,
     }
 
     if args.command is None:

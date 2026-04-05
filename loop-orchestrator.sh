@@ -50,7 +50,7 @@ print_progress() {
 
 # ── Remaining tasks helper ────────────────────────────
 remaining_count() {
-  sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM tasks WHERE status IN ('pending','running','fail');"
+  sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM tasks WHERE status IN ('pending','running','fail','blocked');"
 }
 
 # ── Smart cooldown helper ─────────────────────────────
@@ -112,6 +112,7 @@ while true; do
   if [ "$REMAINING" -eq 0 ]; then
     echo "[loop] All tasks completed! (${ROUND} rounds, ${ELAPSED}s elapsed)" >&2
     print_progress
+    bash "$SCRIPT_DIR/notify.sh" "所有任務已完成！共 ${ROUND} 輪，耗時 ${ELAPSED}s" --level done || true
     exit 0
   fi
 
@@ -134,6 +135,7 @@ while true; do
   REMAINING=$(remaining_count)
   if [ "$REMAINING" -eq 0 ]; then
     echo "[loop] All tasks completed! (${ROUND} rounds, ${ELAPSED}s elapsed)" >&2
+    bash "$SCRIPT_DIR/notify.sh" "所有任務已完成！共 ${ROUND} 輪，耗時 ${ELAPSED}s" --level done || true
     exit 0
   fi
 

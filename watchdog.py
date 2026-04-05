@@ -112,14 +112,129 @@ def check_long_runners(conn: sqlite3.Connection) -> list:
     return issues
 
 
+def check_blocked_parents(conn: sqlite3.Connection) -> list:
+    """檢查 blocked 狀態的父任務，看子任務是否都完成了。"""
+    issues = []
+    blocked = conn.execute(
+        "SELECT id, verify_cmd FROM tasks WHERE status = 'blocked'"
+    ).fetchall()
+
+    for parent in blocked:
+        parent_id = parent["id"]
+        children = conn.execute(
+            "SELECT id, status FROM tasks WHERE spawned_by = ?",
+            (parent_id,),
+        ).fetchall()
+
+        # 沒有子任務（孤兒 blocked），設回 pending
+        if not children:
+            conn.execute(
+                "UPDATE tasks SET status = 'pending', updated_at = ? WHERE id = ?",
+                (datetime.utcnow().isoformat(), parent_id),
+            )
+            conn.commit()
+            issues.append(
+                f"UNBLOCKED: {parent_id} — 無子任務，設回 pending"
+            )
+            continue
+
+        statuses = [c["status"] for c in children]
+
+        if all(s == "pass" for s in statuses):
+            # 全部子任務通過
+            if parent["verify_cmd"]:
+                # 有驗證指令，設為 pending 讓它重跑驗證
+                new_status = "pending"
+            else:
+                new_status = "pass"
+            conn.execute(
+                "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
+                (new_status, datetime.utcnow().isoformat(), parent_id),
+            )
+            conn.commit()
+            issues.append(
+                f"UNBLOCKED: {parent_id} — 所有子任務通過，設為 {new_status}"
+            )
+        elif any(s == "escalated" for s in statuses):
+            # 有子任務升級，父任務也升級
+            conn.execute(
+                "UPDATE tasks SET status = 'escalated', updated_at = ? WHERE id = ?",
+                (datetime.utcnow().isoformat(), parent_id),
+            )
+            conn.commit()
+            issues.append(
+                f"ESCALATED: {parent_id} — 子任務中有 escalated"
+            )
+        # 其他情況（仍有 pending/running/fail/blocked）保持 blocked
+
+    return issues
+
+
+def check_looping_tasks(conn: sqlite3.Connection) -> list:
+    """偵測連續產出相同結果的任務（循環卡住）。
+
+    比較同一 task 最近 2 次 run 的 output_fingerprint。
+    若相同，標記 error_class 為 looping 並減少剩餘嘗試次數以加速 escalate。
+    """
+    issues = []
+
+    # 找所有 fail 狀態且 attempt >= 2 的任務
+    tasks = conn.execute(
+        """SELECT id, attempt_count, max_attempts, error_class FROM tasks
+           WHERE status IN ('fail', 'pending')
+             AND attempt_count >= 2
+             AND (error_class IS NULL OR error_class != 'looping')"""
+    ).fetchall()
+
+    for task in tasks:
+        try:
+            runs = conn.execute(
+                """SELECT output_fingerprint FROM runs
+                   WHERE task_id = ? AND output_fingerprint IS NOT NULL
+                   ORDER BY id DESC LIMIT 2""",
+                (task["id"],),
+            ).fetchall()
+        except Exception:
+            # output_fingerprint 欄位不存在（migration 未跑）
+            break
+
+        if len(runs) < 2:
+            continue
+        if runs[0]["output_fingerprint"] != runs[1]["output_fingerprint"]:
+            continue
+
+        # 偵測到迴圈：標記 + 減少嘗試上限
+        now = datetime.utcnow().isoformat()
+        conn.execute(
+            """UPDATE tasks SET error_class = 'looping', updated_at = ?
+               WHERE id = ?""",
+            (now, task["id"]),
+        )
+        conn.execute(
+            """UPDATE tasks
+               SET max_attempts = MIN(max_attempts, attempt_count + 1),
+                   updated_at = ?
+               WHERE id = ?""",
+            (now, task["id"]),
+        )
+        issues.append(
+            f"LOOPING: {task['id']} — 連續 2 次相同輸出，"
+            f"已減少剩餘嘗試 ({task['attempt_count']}/{task['max_attempts']})"
+        )
+
+    if issues:
+        conn.commit()
+    return issues
+
+
 def check_all_done(conn: sqlite3.Connection) -> list:
-    """Check if all work is complete (no pending/running/fail tasks).
+    """Check if all work is complete (no pending/running/fail/blocked tasks).
 
     Returns a completion message or empty list.
     """
     remaining = conn.execute(
         """SELECT COUNT(*) as cnt FROM tasks
-           WHERE status IN ('pending', 'running', 'fail')"""
+           WHERE status IN ('pending', 'running', 'fail', 'blocked')"""
     ).fetchone()
 
     if remaining["cnt"] == 0:
@@ -137,6 +252,8 @@ def run_check() -> list:
         issues.extend(check_stuck_tasks(conn))
         issues.extend(check_global_stall(conn))
         issues.extend(check_long_runners(conn))
+        issues.extend(check_blocked_parents(conn))
+        issues.extend(check_looping_tasks(conn))
         issues.extend(check_all_done(conn))
         return issues
     finally:
@@ -177,6 +294,8 @@ def main():
 
     sub.add_parser("check", help="Run all watchdog checks")
     sub.add_parser("auto-redispatch", help="Redispatch failed tasks with remaining budget")
+    sub.add_parser("check-blocked", help="Check and unblock parent tasks whose sub-tasks completed")
+    sub.add_parser("check-looping", help="Detect tasks stuck in output loops")
 
     args = parser.parse_args()
 
@@ -191,6 +310,30 @@ def main():
     elif args.command == "auto-redispatch":
         count = auto_redispatch()
         print(f"Redispatched {count} tasks")
+
+    elif args.command == "check-blocked":
+        conn = get_connection()
+        try:
+            issues = check_blocked_parents(conn)
+            if issues:
+                for issue in issues:
+                    print(issue)
+            else:
+                print("No blocked parents to unblock.")
+        finally:
+            conn.close()
+
+    elif args.command == "check-looping":
+        conn = get_connection()
+        try:
+            issues = check_looping_tasks(conn)
+            if issues:
+                for issue in issues:
+                    print(issue)
+            else:
+                print("No looping tasks detected.")
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ ready tasks respecting dependency ordering.
 import argparse
 import json
 import os
+import shutil
 import sqlite3
 import sys
 from datetime import datetime
@@ -145,14 +146,17 @@ def mark_running(task_id: str, worker_id: int):
 
 
 def mark_pass(task_id: str):
-    """Set a task's status to 'pass'."""
+    """Set a task's status to 'pass'.
+
+    若 task 目前為 blocked 狀態則不覆蓋，避免子任務完成前提早解鎖。
+    """
     conn = get_connection()
     try:
         conn.execute(
             """UPDATE tasks
                SET status = 'pass',
                    updated_at = ?
-               WHERE id = ?""",
+               WHERE id = ? AND status != 'blocked'""",
             (datetime.utcnow().isoformat(), task_id),
         )
         conn.commit()
@@ -300,6 +304,127 @@ def get_pipeline_status(pipeline_id: str) -> dict:
         conn.close()
 
 
+def spawn_subtasks(parent_id: str, subtasks_json: str, context_file: str = None) -> list:
+    """從 parent task 衍生子任務，並將 parent 設為 blocked。
+
+    回傳建立的 subtask ID list。若 spawn 深度 >= 3 則拒絕。
+    """
+    conn = get_connection()
+    try:
+        # WHY: 整個操作需要在同一個事務內完成，失敗時不改 parent 狀態
+        conn.execute("BEGIN")
+
+        # 1. 讀取 parent task
+        parent = conn.execute(
+            "SELECT * FROM tasks WHERE id = ?", (parent_id,)
+        ).fetchone()
+        if parent is None:
+            print(f"錯誤：找不到 parent task: {parent_id}", file=sys.stderr)
+            return []
+
+        # 2. 計算 spawn 深度：沿 spawned_by 鏈往上追溯
+        depth = 0
+        current_spawned_by = parent["spawned_by"]
+        while current_spawned_by:
+            depth += 1
+            ancestor = conn.execute(
+                "SELECT spawned_by FROM tasks WHERE id = ?",
+                (current_spawned_by,),
+            ).fetchone()
+            if ancestor is None:
+                break
+            current_spawned_by = ancestor["spawned_by"]
+
+        # CONSTRAINT: 最大 spawn 深度為 3，防止無限遞迴
+        if depth >= 3:
+            print(
+                f"錯誤：spawn 深度已達 {depth}，超過上限 3",
+                file=sys.stderr,
+            )
+            return []
+
+        # 3. 解析 subtasks JSON
+        try:
+            subtasks = json.loads(subtasks_json)
+        except json.JSONDecodeError as e:
+            print(f"錯誤：無法解析 subtasks JSON: {e}", file=sys.stderr)
+            return []
+
+        if not isinstance(subtasks, list):
+            print("錯誤：subtasks 必須是 JSON array", file=sys.stderr)
+            return []
+
+        # 4. 逐一建立 subtask
+        now = datetime.utcnow().isoformat()
+        created_ids = []
+
+        for st in subtasks:
+            if "id" not in st or "goal" not in st:
+                print(
+                    f"錯誤：subtask 缺少必填欄位 id 或 goal: {st}",
+                    file=sys.stderr,
+                )
+                conn.execute("ROLLBACK")
+                return []
+
+            st_id = st["id"]
+            st_goal = st["goal"]
+            st_touches = json.dumps(st.get("touches", []))
+            st_verify = st.get("verify", None)
+            st_role = st.get("role", "implementer")
+            st_depends = json.dumps(st.get("depends_on", []))
+            st_max = st.get("max_attempts", 3)
+
+            conn.execute(
+                """INSERT INTO tasks
+                   (id, project, project_dir, goal, verify_cmd, depends_on,
+                    touches, status, attempt_count, max_attempts, role, stage,
+                    pipeline_id, spawned_by, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, NULL, ?, ?, ?, ?)""",
+                (
+                    st_id,
+                    parent["project"],
+                    parent["project_dir"],
+                    st_goal,
+                    st_verify,
+                    st_depends,
+                    st_touches,
+                    st_max,
+                    st_role,
+                    parent["pipeline_id"],
+                    parent_id,
+                    now,
+                    now,
+                ),
+            )
+            created_ids.append(st_id)
+
+        # 5. 如果有 context_file，複製到指定路徑
+        if context_file and os.path.isfile(context_file):
+            dest = f"/tmp/spawn-context-{parent_id}.md"
+            shutil.copy2(context_file, dest)
+
+        # 6. 更新 parent 為 blocked
+        # CONSTRAINT: SQLite CHECK constraint 可能不包含 'blocked'，需要繞過
+        conn.execute("PRAGMA ignore_check_constraints=ON")
+        conn.execute(
+            """UPDATE tasks
+               SET status = 'blocked', updated_at = ?
+               WHERE id = ?""",
+            (now, parent_id),
+        )
+        conn.execute("PRAGMA ignore_check_constraints=OFF")
+
+        conn.execute("COMMIT")
+        return created_ids
+
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="DAG management and task selection"
@@ -350,6 +475,13 @@ def main():
     ps = sub.add_parser("pipeline-status", help="Print pipeline status")
     ps.add_argument("pipeline_id", help="Pipeline ID")
 
+    # spawn-subtasks
+    sp = sub.add_parser("spawn-subtasks", help="Spawn sub-tasks and block parent")
+    sp.add_argument("--parent", required=True, help="Parent task ID")
+    sp.add_argument("--subtasks", help="JSON array of subtask objects")
+    sp.add_argument("--from-file", help="JSON file containing subtask array")
+    sp.add_argument("--context-file", help="Context file to pass to sub-tasks")
+
     args = parser.parse_args()
 
     if args.command == "import":
@@ -397,6 +529,24 @@ def main():
     elif args.command == "pipeline-status":
         status = get_pipeline_status(args.pipeline_id)
         print(json.dumps(status, indent=2, default=str))
+
+    elif args.command == "spawn-subtasks":
+        # 從 --from-file 或 --subtasks 取得 JSON
+        if args.from_file:
+            with open(args.from_file, encoding="utf-8") as f:
+                subtasks_data = f.read()
+        elif args.subtasks:
+            subtasks_data = args.subtasks
+        else:
+            print("錯誤：需要 --subtasks 或 --from-file", file=sys.stderr)
+            sys.exit(1)
+
+        ids = spawn_subtasks(args.parent, subtasks_data, args.context_file)
+        if ids:
+            print(f"已建立 {len(ids)} 個子任務: {ids}")
+        else:
+            print("未建立任何子任務", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":
