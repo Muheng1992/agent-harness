@@ -441,26 +441,47 @@ def _auto_extract_manifest_from_source(task_id: str) -> dict:
 def read_project_brief(project_dir: str) -> str:
     """讀取專案的 project brief（所有已完成任務的介面與決策摘要）。
 
-    Brief 存於 {project_dir}/.harness/project-brief.md。
-    用於並行任務之間的語意同步，避免介面衝突。
+    Per-task brief 存於 {project_dir}/.harness/briefs/{task_id}.md。
+    按 mtime 排序串接，超過 8000 字元時從最舊的開始丟棄。
+    向後相容：如果 briefs/ 為空但舊的 project-brief.md 存在，讀舊檔案。
     """
-    brief_path = Path(project_dir) / ".harness" / "project-brief.md"
-    if not brief_path.exists():
+    briefs_dir = Path(project_dir) / ".harness" / "briefs"
+    brief_files = sorted(briefs_dir.glob("*.md"), key=lambda f: f.stat().st_mtime) if briefs_dir.exists() else []
+
+    if not brief_files:
+        # 向後相容：讀舊的單一 brief 檔案
+        legacy_path = Path(project_dir) / ".harness" / "project-brief.md"
+        if legacy_path.exists():
+            try:
+                return legacy_path.read_text(encoding="utf-8")
+            except OSError:
+                pass
         return ""
-    try:
-        return brief_path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
+
+    # 從最新的開始收集，直到超過 8000 字元預算
+    BUDGET = 8000
+    blocks = []
+    total_chars = 0
+    for bf in reversed(brief_files):  # 最新的優先
+        try:
+            content = bf.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if total_chars + len(content) > BUDGET and blocks:
+            break  # 預算用完，停止收集（但至少保留一個）
+        blocks.append(content)
+        total_chars += len(content)
+
+    blocks.reverse()  # 恢復時間順序（舊 → 新）
+    return "\n\n".join(blocks)
 
 
 def update_project_brief(task_id: str):
-    """將任務的 handoff manifest 追加或更新到 project brief。
+    """將任務的 handoff manifest 寫入 per-task brief 檔案。
 
-    格式為 markdown 區塊，以 task_id 為標題。
-    限制 brief 總大小不超過 8000 字元（超過時刪除最舊的區塊）。
+    每個 task 寫入自己的 .harness/briefs/{task_id}.md，
+    結構性消除並行寫入的 race condition。
     """
-    import re
-
     conn = get_connection()
     try:
         task = conn.execute(
@@ -470,17 +491,13 @@ def update_project_brief(task_id: str):
             return
 
         project_dir = task["project_dir"]
-        brief_path = Path(project_dir) / ".harness" / "project-brief.md"
+        briefs_dir = Path(project_dir) / ".harness" / "briefs"
+        briefs_dir.mkdir(parents=True, exist_ok=True)
 
-        # 確保目錄存在
-        brief_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # 讀取 manifest
         manifest = _read_handoff_manifest(task_id)
         if not manifest:
             return
 
-        # 建立新區塊
         block_lines = [f"## {task_id}"]
         if manifest.get("interfaces"):
             block_lines.append("- **Interfaces:**")
@@ -490,35 +507,9 @@ def update_project_brief(task_id: str):
             block_lines.append("- **Decisions:**")
             for d in manifest["decisions"][:5]:
                 block_lines.append(f"  - {d}")
-        new_block = "\n".join(block_lines) + "\n"
 
-        # 讀取現有 brief
-        existing = ""
-        if brief_path.exists():
-            try:
-                existing = brief_path.read_text(encoding="utf-8")
-            except OSError:
-                existing = ""
-
-        # 如果已有該 task_id 的區塊，替換之
-        pattern = re.compile(
-            rf'^## {re.escape(task_id)}\n(?:(?!^## ).)*',
-            re.MULTILINE | re.DOTALL
-        )
-        if pattern.search(existing):
-            existing = pattern.sub(new_block, existing)
-        else:
-            existing = existing.rstrip("\n") + "\n\n" + new_block if existing.strip() else new_block
-
-        # 限制總大小 8000 字元（超過時刪除最舊的區塊）
-        while len(existing) > 8000:
-            # 找到第一個 ## 區塊並刪除
-            first_block = re.search(r'^## .+?\n(?:(?!^## ).)*', existing, re.MULTILINE | re.DOTALL)
-            if not first_block:
-                break
-            existing = existing[first_block.end():].lstrip("\n")
-
-        brief_path.write_text(existing, encoding="utf-8")
+        brief_path = briefs_dir / f"{task_id}.md"
+        brief_path.write_text("\n".join(block_lines) + "\n", encoding="utf-8")
     finally:
         conn.close()
 
@@ -551,6 +542,34 @@ def read_spawn_context(task_id: str) -> str:
             return content[:4000]
         except OSError:
             return ""
+    finally:
+        conn.close()
+
+
+def read_parallel_context(task_id: str) -> str:
+    """列出目前正在並行執行的其他任務，供 agent 協調共享介面。
+
+    查詢 DB 中 status='running' 且 id != task_id 的任務，
+    回傳 markdown 格式的任務清單（ID、目標摘要、碰觸的檔案）。
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, goal, touches FROM tasks WHERE status = 'running' AND id != ?",
+            (task_id,),
+        ).fetchall()
+
+        if not rows:
+            return ""
+
+        lines = []
+        for row in rows:
+            goal_short = row["goal"][:80] if row["goal"] else ""
+            touches = json.loads(row["touches"] or "[]")
+            lines.append(f"- **{row['id']}** — {goal_short}")
+            if touches:
+                lines.append(f"  碰觸的檔案: {', '.join(f'`{t}`' for t in touches)}")
+        return "\n".join(lines)
     finally:
         conn.close()
 
@@ -705,6 +724,10 @@ def main():
     rsc = sub.add_parser("read-spawn-context", help="Read spawn context for a task")
     rsc.add_argument("task_id", help="Task ID")
 
+    # read-parallel
+    rp = sub.add_parser("read-parallel", help="List other tasks running in parallel")
+    rp.add_argument("task_id", help="Task ID (exclude self)")
+
     # write
     write_p = sub.add_parser("write", help="Record a run for a task")
     write_p.add_argument("task_id", help="Task ID")
@@ -787,6 +810,11 @@ def main():
     elif args.command == "update-brief":
         update_project_brief(args.task_id)
         print(f"Project brief updated for {args.task_id}")
+
+    elif args.command == "read-parallel":
+        result = read_parallel_context(args.task_id)
+        if result:
+            print(result)
 
     elif args.command == "read-spawn-context":
         result = read_spawn_context(args.task_id)

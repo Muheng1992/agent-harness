@@ -31,10 +31,17 @@ except ImportError:
 
 # ── 路徑設定 ──────────────────────────────────────────────
 
-DB_PATH = os.environ.get(
-    "AGENT_DB_PATH",
-    str(Path(__file__).resolve().parent / "db" / "agent.db"),
-)
+def _resolve_db_path() -> str:
+    """優先順序：環境變數 > ~/.agent-harness/db > 腳本同層目錄/db"""
+    env = os.environ.get("AGENT_DB_PATH")
+    if env:
+        return env
+    home_db = Path.home() / ".agent-harness" / "db" / "agent.db"
+    if home_db.exists():
+        return str(home_db)
+    return str(Path(__file__).resolve().parent / "db" / "agent.db")
+
+DB_PATH = _resolve_db_path()
 
 STATUS_ICONS = {
     "pending": "⏳",

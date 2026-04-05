@@ -69,6 +69,9 @@ PROJECT_BRIEF=$(python3 memory.py read-brief "$TASK_ID" 2>/dev/null) || PROJECT_
 # ── 2d. Read spawn context (如果是被父任務 spawn 的子任務) ──
 SPAWN_CONTEXT=$(python3 memory.py read-spawn-context "$TASK_ID" 2>/dev/null) || SPAWN_CONTEXT=""
 
+# ── 2e. Read parallel context (正在並行執行的其他任務) ──
+PARALLEL_CONTEXT=$(python3 memory.py read-parallel "$TASK_ID" 2>/dev/null) || PARALLEL_CONTEXT=""
+
 # ── 3. Check for previous errors (heal prompt) ──────────
 ERROR_HISTORY=$(echo "$TASK_JSON" | jq -r '.last_error // empty')
 ERROR_CLASS=$(echo "$TASK_JSON" | jq -r '.error_class // empty')
@@ -109,12 +112,15 @@ ${UPSTREAM_CONTEXT}
 ${SPAWN_CONTEXT}
 }${MEMORY_CONTEXT:+CONTEXT FROM YOUR PREVIOUS ATTEMPTS ON THIS TASK:
 ${MEMORY_CONTEXT}
+}${PARALLEL_CONTEXT:+PARALLEL TASKS (currently running alongside you — be careful with shared interfaces):
+${PARALLEL_CONTEXT}
 }${HEAL_PROMPT}
 
 INSTRUCTIONS:
 - Complete the task fully and correctly.
 - Work in the current directory.
 - CRITICAL: The "關鍵決策" and "祖先決策" shown above are design decisions you must follow — they are NOT in the source code. Before writing ANY code, use the Read tool to read EVERY source code file and handoff manifest listed in UPSTREAM TASKS. Do NOT assume interfaces, naming, or structure — verify by reading the actual files.
+- If you modify a shared interface that other parallel tasks might depend on, use Read to check .harness/briefs/ for the latest peer updates before finalizing your changes.
 - Do not ask questions; make reasonable decisions.
 
 SUB-TASK SPAWNING:

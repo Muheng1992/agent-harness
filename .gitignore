@@ -5,6 +5,10 @@ db/*.db-shm
 
 # Worktrees
 .worktrees/
+.claude/worktrees/
+
+# Runtime DB (root level)
+agent.db
 
 # Logs
 logs/*.log

@@ -11,9 +11,38 @@ DB_PATH="db/agent.db"
 MAX_WORKERS="${1:-4}"
 WORKER_PIDS=()
 
+# ── Web Dashboard ────────────────────────────────────────
+WEB_DASHBOARD_PID=""
+WEB_DASHBOARD_PORT=8745
+
+start_web_dashboard() {
+  local dashboard_script="$SCRIPT_DIR/web-dashboard"
+  # 檢查 web-dashboard 是否存在
+  if [ ! -f "$dashboard_script" ] && [ ! -d "$dashboard_script" ]; then
+    return
+  fi
+  # 檢查 port 是否已被佔用
+  if lsof -i :"$WEB_DASHBOARD_PORT" >/dev/null 2>&1; then
+    echo "[parallel] Web Dashboard port $WEB_DASHBOARD_PORT 已被佔用，跳過啟動" >&2
+    return
+  fi
+  python3 "$dashboard_script" --port "$WEB_DASHBOARD_PORT" >/dev/null 2>&1 &
+  WEB_DASHBOARD_PID=$!
+  echo "[parallel] Web Dashboard 已啟動：http://localhost:$WEB_DASHBOARD_PORT" >&2
+  open "http://localhost:$WEB_DASHBOARD_PORT" 2>/dev/null || true
+}
+
+stop_web_dashboard() {
+  if [ -n "$WEB_DASHBOARD_PID" ]; then
+    kill "$WEB_DASHBOARD_PID" 2>/dev/null || true
+    WEB_DASHBOARD_PID=""
+  fi
+}
+
 # ── Cleanup: kill all workers on exit ────────────────────
 cleanup() {
   echo "[parallel] Cleaning up worker processes..." >&2
+  stop_web_dashboard
   for pid in "${WORKER_PIDS[@]}"; do
     if kill -0 "$pid" 2>/dev/null; then
       kill "$pid" 2>/dev/null || true
@@ -25,6 +54,8 @@ cleanup() {
   done
 }
 trap cleanup EXIT INT TERM
+
+start_web_dashboard
 
 # ── 1. Watchdog: auto-redispatch + health check ─────────
 echo "[parallel] Running watchdog..." >&2

@@ -1,0 +1,1977 @@
+#!/usr/bin/env python3
+"""web-dashboard — Agent Harness REST API server。
+
+用 Python 內建 http.server 實作，提供 JSON API 供前端儀表板使用。
+
+用法：
+  web-dashboard                # 啟動 API server（預設 port 8745）
+  web-dashboard --port 9000    # 指定 port
+  web-dashboard --check        # 自我測試模式
+"""
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+import sys
+import threading
+import time
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from pathlib import Path
+from urllib.parse import urlparse, parse_qs
+
+# ── 內嵌儀表板 HTML ──────────────────────────────────────────
+
+DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Harness — 追溯儀表板</title>
+<style>
+/* ── 全域重置與基礎 ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #1a1a2e;
+  --card: #16213e;
+  --accent: #0f3460;
+  --error: #e94560;
+  --text: #e0e0e0;
+  --text-dim: #8892a4;
+  --border: #2a2a4a;
+  --success: #2ecc71;
+  --amber: #f0a500;
+  --cyan: #00d2d3;
+  --blue: #3498db;
+  --gray: #7f8c8d;
+  --red-bold: #ff2e63;
+  --radius: 8px;
+  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+}
+html, body { height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+a { color: var(--cyan); text-decoration: none; }
+a:hover { text-decoration: underline; }
+pre, code { font-family: var(--mono); }
+
+/* ── 頂部導航 ── */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  height: 56px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.topbar h1 { font-size: 18px; font-weight: 600; }
+.topbar h1 span { color: var(--cyan); }
+.topbar-controls { display: flex; align-items: center; gap: 12px; }
+.auto-refresh-toggle {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--text-dim); cursor: pointer; user-select: none;
+}
+.auto-refresh-toggle input { accent-color: var(--cyan); }
+
+/* ── Tab 列 ── */
+.tabs {
+  display: flex;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+}
+.tab-btn {
+  padding: 12px 20px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all .2s;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+
+/* ── 內容區 ── */
+.tab-content { display: none; padding: 24px; min-height: calc(100vh - 112px); overflow-y: auto; max-height: calc(100vh - 112px); }
+.tab-content.active { display: block; }
+
+/* ── 統計卡片 ── */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.stat-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: center;
+}
+.stat-card .value { font-size: 28px; font-weight: 700; }
+.stat-card .label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; margin-top: 4px; }
+.stat-card.pending .value { color: var(--amber); }
+.stat-card.running .value { color: var(--cyan); }
+.stat-card.pass .value { color: var(--success); }
+.stat-card.fail .value { color: var(--error); }
+.stat-card.escalated .value { color: var(--red-bold); }
+.stat-card.blocked .value { color: var(--blue); }
+.stat-card.rate .value { color: var(--cyan); }
+
+/* ── 篩選列 ── */
+.filter-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.filter-row select, .filter-row input {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  min-width: 160px;
+}
+.filter-row select:focus, .filter-row input:focus { outline: none; border-color: var(--cyan); }
+
+/* ── 表格 ── */
+.task-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.task-table th {
+  text-align: left;
+  padding: 10px 12px;
+  background: var(--accent);
+  color: var(--text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: .5px;
+  position: sticky;
+  top: 0;
+}
+.task-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.task-table tr { cursor: pointer; transition: background .15s; }
+.task-table tbody tr:hover { background: rgba(15, 52, 96, .3); }
+
+/* ── Status 標籤 ── */
+.status-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .3px;
+}
+.status-badge.pending   { background: rgba(240,165,0,.15); color: var(--amber); }
+.status-badge.running   { background: rgba(0,210,211,.15); color: var(--cyan); }
+.status-badge.pass      { background: rgba(46,204,113,.15); color: var(--success); }
+.status-badge.fail      { background: rgba(233,69,96,.15); color: var(--error); }
+.status-badge.escalated { background: rgba(255,46,99,.2); color: var(--red-bold); font-weight: 800; }
+.status-badge.skipped   { background: rgba(127,140,141,.15); color: var(--gray); }
+.status-badge.blocked   { background: rgba(52,152,219,.15); color: var(--blue); }
+
+/* ── 詳情面板 ── */
+.detail-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin: 8px 0 16px 0;
+  animation: slideDown .2s ease;
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.detail-panel .detail-row { margin-bottom: 10px; }
+.detail-panel .detail-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 2px; }
+.detail-panel .detail-value { font-size: 13px; word-break: break-word; }
+.detail-panel pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.btn {
+  display: inline-block;
+  padding: 6px 16px;
+  background: var(--accent);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .2s;
+}
+.btn:hover { background: var(--cyan); color: var(--bg); }
+
+/* ── Graph Tab ── */
+.graph-container { padding: 20px; overflow: auto; -webkit-overflow-scrolling: touch; max-height: calc(100vh - 200px); }
+
+/* ── DAG 視覺化 ── */
+.dag-canvas {
+  position: relative;
+  min-width: 100%;
+}
+.dag-canvas svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+.dag-layer {
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  margin-bottom: 60px;
+  position: relative;
+}
+.dag-layer-label {
+  position: absolute;
+  left: 0;
+  top: -20px;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.node-card {
+  background: var(--card);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  min-width: 150px;
+  max-width: 200px;
+  text-align: center;
+  cursor: pointer;
+  transition: all .2s;
+  position: relative;
+  z-index: 2;
+}
+.node-card:hover { border-color: var(--cyan); transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,210,211,.15); }
+.node-card.highlighted { border-color: var(--cyan); box-shadow: 0 0 12px rgba(0,210,211,.3); }
+.node-card .node-id { font-size: 11px; font-weight: 600; color: var(--text); margin-bottom: 2px; word-break: break-all; }
+.node-card .node-role { font-size: 10px; color: var(--text-dim); margin-top: 3px; }
+.node-card .node-goal { font-size: 11px; margin-top: 4px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.node-card.status-pending   { border-left: 4px solid var(--amber); }
+.node-card.status-running   { border-left: 4px solid var(--cyan); }
+.node-card.status-pass      { border-left: 4px solid var(--success); }
+.node-card.status-fail      { border-left: 4px solid var(--error); }
+.node-card.status-escalated { border-left: 4px solid var(--red-bold); }
+.node-card.status-skipped   { border-left: 4px solid var(--gray); }
+.node-card.status-blocked   { border-left: 4px solid var(--blue); }
+
+/* 按 project 分組 */
+.graph-project-group {
+  margin-bottom: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  background: rgba(22, 33, 62, .3);
+}
+.graph-project-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--cyan);
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.graph-node-detail {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-top: 16px;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ── Prompt 檢視器 ── */
+.prompt-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 16px;
+  height: calc(100vh - 160px);
+}
+.prompt-sidebar {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.prompt-sidebar .sidebar-item {
+  padding: 10px 16px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: all .15s;
+  font-size: 13px;
+}
+.prompt-sidebar .sidebar-item:hover { background: rgba(15, 52, 96, .3); }
+.prompt-sidebar .sidebar-item.active { background: rgba(15, 52, 96, .5); border-left-color: var(--cyan); }
+.prompt-sidebar .sidebar-item .item-id { color: var(--text-dim); font-size: 11px; }
+.prompt-main {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-y: auto;
+  padding: 20px;
+}
+.prompt-search {
+  padding: 8px 16px;
+  margin-bottom: 4px;
+}
+.prompt-search input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.prompt-search input:focus { outline: none; border-color: var(--cyan); }
+
+.run-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.run-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: background .15s;
+}
+.run-header:hover { background: rgba(15, 52, 96, .2); }
+.run-body { padding: 0 16px 16px; }
+.run-body h4 { font-size: 12px; color: var(--text-dim); text-transform: uppercase; margin: 12px 0 6px; }
+
+/* ── Audit Log ── */
+.timeline { position: relative; padding-left: 32px; }
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--border);
+}
+.timeline-item {
+  position: relative;
+  margin-bottom: 16px;
+  animation: slideDown .2s ease;
+}
+.timeline-item::before {
+  content: '';
+  position: absolute;
+  left: -25px;
+  top: 14px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--border);
+}
+.timeline-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+}
+.timeline-card .tl-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.timeline-card .tl-time { font-size: 12px; color: var(--text-dim); }
+.timeline-card .tl-actor { font-size: 12px; color: var(--text-dim); }
+.event-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.event-badge.task_created   { background: rgba(0,210,211,.15); color: var(--cyan); }
+.event-badge.task_started   { background: rgba(0,210,211,.15); color: var(--cyan); }
+.event-badge.task_completed { background: rgba(46,204,113,.15); color: var(--success); }
+.event-badge.task_failed    { background: rgba(233,69,96,.15); color: var(--error); }
+.event-badge.task_escalated { background: rgba(255,46,99,.2); color: var(--red-bold); }
+.event-badge.run_started    { background: rgba(52,152,219,.15); color: var(--blue); }
+.event-badge.run_completed  { background: rgba(46,204,113,.15); color: var(--success); }
+.event-badge.default        { background: rgba(127,140,141,.15); color: var(--gray); }
+.tl-task-link { color: var(--cyan); cursor: pointer; font-size: 12px; }
+.tl-task-link:hover { text-decoration: underline; }
+
+/* ── Loading / Empty ── */
+.spinner {
+  display: inline-block;
+  width: 24px; height: 24px;
+  border: 3px solid var(--border);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px;
+  gap: 12px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-dim);
+}
+.empty-state .empty-icon { font-size: 48px; margin-bottom: 12px; opacity: .5; }
+.empty-state .empty-text { font-size: 14px; }
+
+/* ── 雜項 ── */
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+.clickable { cursor: pointer; }
+mark { background: rgba(240,165,0,.3); color: var(--text); padding: 0 2px; border-radius: 2px; }
+
+/* ── 全螢幕 Modal（Prompt / Output 大視窗） ── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .75);
+  z-index: 1000;
+  justify-content: center;
+  align-items: center;
+  padding: 24px;
+}
+.modal-overlay.active { display: flex; }
+.modal-box {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 95vw;
+  max-width: 1200px;
+  height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.modal-header h3 { font-size: 16px; }
+.modal-close {
+  background: none; border: none; color: var(--text-dim);
+  font-size: 24px; cursor: pointer; padding: 4px 8px; border-radius: 4px;
+}
+.modal-close:hover { background: rgba(255,255,255,.1); color: var(--text); }
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 24px;
+  -webkit-overflow-scrolling: touch;
+}
+.modal-body pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  max-width: 100%;
+}
+.modal-body h4 {
+  font-size: 13px;
+  color: var(--cyan);
+  text-transform: uppercase;
+  margin: 20px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-body h4:first-child { margin-top: 0; }
+
+/* Prompt 區塊的展開按鈕 */
+.expand-btn {
+  background: rgba(15, 52, 96, .5);
+  border: 1px solid var(--border);
+  color: var(--cyan);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-left: 8px;
+}
+.expand-btn:hover { background: rgba(15, 52, 96, .8); }
+
+/* ── 表格、pre 的滾動 ── */
+.task-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.run-body pre { white-space: pre-wrap; word-wrap: break-word; max-height: 400px; overflow-y: auto; padding: 12px; background: rgba(0,0,0,.2); border-radius: 4px; font-size: 12px; line-height: 1.5; }
+
+/* ── Markdown 渲染 ── */
+.md-content { font-size: 14px; line-height: 1.7; }
+.md-content p.md-p { margin-bottom: 8px; }
+.md-content strong { color: var(--text); font-weight: 600; }
+.md-content em { font-style: italic; color: var(--text-dim); }
+.md-content .md-h { color: var(--cyan); margin: 16px 0 8px; font-weight: 600; }
+h3.md-h { font-size: 18px; }
+h4.md-h { font-size: 16px; }
+h5.md-h { font-size: 14px; }
+h6.md-h { font-size: 13px; }
+.md-content .md-hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.md-content li.md-li { margin-left: 20px; margin-bottom: 4px; list-style: disc; }
+.md-content li.md-ol { list-style: decimal; }
+.md-content pre.md-code-block { background: rgba(0,0,0,.3); padding: 12px 16px; border-radius: 6px; overflow-x: auto; margin: 8px 0; font-size: 13px; line-height: 1.5; }
+.md-content code.md-inline-code { background: rgba(0,0,0,.3); padding: 2px 6px; border-radius: 3px; font-size: 13px; color: var(--amber); }
+.md-meta { display: flex; gap: 16px; margin-bottom: 12px; padding: 8px 12px; background: rgba(0,0,0,.2); border-radius: 4px; font-size: 12px; color: var(--text-dim); }
+.md-meta span { display: flex; align-items: center; gap: 4px; }
+.md-meta .label { color: var(--text-dim); }
+.md-meta .value { color: var(--text); font-weight: 500; }
+</style>
+</head>
+<body>
+
+<!-- 頂部導航 -->
+<div class="topbar">
+  <h1><span>Agent Harness</span> 追溯儀表板</h1>
+  <div class="topbar-controls">
+    <label class="auto-refresh-toggle">
+      <input type="checkbox" id="autoRefreshToggle" checked>
+      自動刷新（5s）
+    </label>
+  </div>
+</div>
+
+<!-- Tab 列 -->
+<div class="tabs">
+  <button class="tab-btn active" data-tab="tasks">任務總覽</button>
+  <button class="tab-btn" data-tab="graph">Agent 分派鏈</button>
+  <button class="tab-btn" data-tab="prompts">Prompt 檢視器</button>
+  <button class="tab-btn" data-tab="audit">Audit Log</button>
+</div>
+
+<!-- ====== Tab 1: 任務總覽 ====== -->
+<div id="tab-tasks" class="tab-content active">
+  <div id="statsRow" class="stats-row"></div>
+  <div class="filter-row">
+    <select id="filterProject"><option value="">所有專案</option></select>
+    <select id="filterStatus"><option value="">所有狀態</option></select>
+    <select id="filterRole"><option value="">所有角色</option></select>
+  </div>
+  <div id="tasksTableWrap">
+    <table class="task-table">
+      <thead>
+        <tr>
+          <th>ID</th><th>專案</th><th>目標</th><th>狀態</th><th>角色</th><th>嘗試次數</th><th>派生自</th><th>更新時間</th>
+        </tr>
+      </thead>
+      <tbody id="tasksBody"></tbody>
+    </table>
+  </div>
+  <div id="tasksLoading" class="loading-overlay"><div class="spinner"></div> 載入中…</div>
+  <div id="tasksEmpty" class="empty-state" style="display:none">
+    <div class="empty-icon">📋</div>
+    <div class="empty-text">尚無任務資料。啟動 Agent Harness 後，任務將顯示於此。</div>
+  </div>
+</div>
+
+<!-- ====== Tab 2: Graph ====== -->
+<div id="tab-graph" class="tab-content">
+  <div id="graphContainer" class="graph-container"></div>
+  <div id="graphNodeDetail" class="graph-node-detail" style="display:none"></div>
+  <div id="graphLoading" class="loading-overlay"><div class="spinner"></div> 載入中…</div>
+  <div id="graphEmpty" class="empty-state" style="display:none">
+    <div class="empty-icon">🔗</div>
+    <div class="empty-text">尚無分派鏈資料。</div>
+  </div>
+</div>
+
+<!-- ====== Tab 3: Prompts ====== -->
+<div id="tab-prompts" class="tab-content">
+  <div class="prompt-layout">
+    <div class="prompt-sidebar">
+      <div class="prompt-search">
+        <input type="text" id="promptSearch" placeholder="搜尋 prompt 內容…">
+      </div>
+      <div id="promptTaskList"></div>
+    </div>
+    <div class="prompt-main" id="promptMain">
+      <div class="empty-state">
+        <div class="empty-icon">📝</div>
+        <div class="empty-text">選擇左側任務以檢視 Prompt 與執行記錄。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ====== Tab 4: Audit Log ====== -->
+<div id="tab-audit" class="tab-content">
+  <div class="filter-row">
+    <select id="auditFilterType"><option value="">所有事件類型</option></select>
+    <input type="text" id="auditFilterTask" placeholder="搜尋 Task ID…">
+  </div>
+  <div id="auditTimeline" class="timeline"></div>
+  <div id="auditLoading" class="loading-overlay"><div class="spinner"></div> 載入中…</div>
+  <div id="auditEmpty" class="empty-state" style="display:none">
+    <div class="empty-icon">📜</div>
+    <div class="empty-text">尚無審計日誌。</div>
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════
+   全域狀態與工具函式
+   ═══════════════════════════════════════ */
+const BASE = window.location.origin;
+let allTasks = [];
+let allAuditLogs = [];
+let autoRefreshInterval = null;
+let expandedTaskId = null;
+let selectedPromptTaskId = null;
+
+function api(path) {
+  return fetch(BASE + path).then(r => {
+    if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+    return r.json();
+  });
+}
+
+function esc(s) {
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
+function truncate(s, n) {
+  if (!s) return '';
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  var s = esc(text);
+  var BT = String.fromCharCode(96);
+  var fence = BT + BT + BT;
+  // code blocks
+  var cbRe = new RegExp(fence + '(\\\\w*)\\n([\\\\s\\\\S]*?)' + fence, 'g');
+  s = s.replace(cbRe, function(_, lang, code) {
+    return '<pre class="md-code-block"><code>' + code + '</code></pre>';
+  });
+  // inline code
+  var icRe = new RegExp(BT + '([^' + BT + ']+)' + BT, 'g');
+  s = s.replace(icRe, '<code class="md-inline-code">$1</code>');
+  // headers
+  s = s.replace(/^#### (.+)$/gm, '<h6 class="md-h">$1</h6>');
+  s = s.replace(/^### (.+)$/gm, '<h5 class="md-h">$1</h5>');
+  s = s.replace(/^## (.+)$/gm, '<h4 class="md-h">$1</h4>');
+  s = s.replace(/^# (.+)$/gm, '<h3 class="md-h">$1</h3>');
+  // bold
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // horizontal rule
+  s = s.replace(/^---$/gm, '<hr class="md-hr">');
+  // unordered list items
+  s = s.replace(/^[\s]*[-] (.+)$/gm, '<li class="md-li">$1</li>');
+  // ordered list items
+  s = s.replace(/^[\s]*\d+\. (.+)$/gm, '<li class="md-li md-ol">$1</li>');
+  // paragraphs (double newline)
+  s = s.replace(new RegExp('\\n\\n', 'g'), '</p><p class="md-p">');
+  // single newline to line break
+  s = s.replace(new RegExp('\\n', 'g'), '<br>');
+  return '<div class="md-content"><p class="md-p">' + s + '</p></div>';
+}
+
+function parseClaudeOutput(raw) {
+  if (!raw) return { summary: '', detail: '' };
+  try {
+    var obj = JSON.parse(raw);
+    return {
+      summary: obj.result || '',
+      detail: raw,
+      duration_ms: obj.duration_ms,
+      num_turns: obj.num_turns,
+      cost: obj.total_cost_usd,
+      is_error: obj.is_error
+    };
+  } catch (e) {
+    return { summary: raw, detail: '' };
+  }
+}
+
+function fmtTime(t) {
+  if (!t) return '—';
+  const d = new Date(t);
+  if (isNaN(d)) return t;
+  return d.toLocaleString('zh-TW', { hour12: false });
+}
+
+function statusBadge(status) {
+  const cls = (status || 'pending').toLowerCase();
+  return '<span class="status-badge ' + esc(cls) + '">' + esc(status) + '</span>';
+}
+
+function eventBadge(type) {
+  const known = ['task_created','task_started','task_completed','task_failed','task_escalated','run_started','run_completed'];
+  const cls = known.includes(type) ? type : 'default';
+  return '<span class="event-badge ' + cls + '">' + esc(type) + '</span>';
+}
+
+function showLoading(id, show) { document.getElementById(id).style.display = show ? 'flex' : 'none'; }
+function showEmpty(id, show)   { document.getElementById(id).style.display = show ? 'block' : 'none'; }
+
+/* ═══════════════════════════════════════
+   Tab 切換
+   ═══════════════════════════════════════ */
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    // 切換時觸發資料載入
+    if (btn.dataset.tab === 'graph') loadGraph();
+    if (btn.dataset.tab === 'prompts') loadPromptTasks();
+    if (btn.dataset.tab === 'audit') loadAudit();
+  });
+});
+
+/* ═══════════════════════════════════════
+   Tab 1: 任務總覽
+   ═══════════════════════════════════════ */
+async function loadTasks() {
+  showLoading('tasksLoading', true);
+  showEmpty('tasksEmpty', false);
+  try {
+    const data = await api('/api/tasks');
+    allTasks = Array.isArray(data) ? data : (data.tasks || []);
+    populateFilters();
+    renderStats();
+    renderTaskTable();
+  } catch (e) {
+    console.error('載入任務失敗:', e);
+    allTasks = [];
+  }
+  showLoading('tasksLoading', false);
+  if (allTasks.length === 0) showEmpty('tasksEmpty', true);
+}
+
+function populateFilters() {
+  const projects = [...new Set(allTasks.map(t => t.project).filter(Boolean))];
+  const statuses = [...new Set(allTasks.map(t => t.status).filter(Boolean))];
+  const roles    = [...new Set(allTasks.map(t => t.role).filter(Boolean))];
+  fillSelect('filterProject', projects, '所有專案');
+  fillSelect('filterStatus', statuses, '所有狀態');
+  fillSelect('filterRole', roles, '所有角色');
+}
+
+function fillSelect(id, items, defaultLabel) {
+  const el = document.getElementById(id);
+  const val = el.value;
+  el.innerHTML = '<option value="">' + defaultLabel + '</option>';
+  items.sort().forEach(item => {
+    el.innerHTML += '<option value="' + esc(item) + '">' + esc(item) + '</option>';
+  });
+  el.value = val;
+}
+
+function getFilteredTasks() {
+  const p = document.getElementById('filterProject').value;
+  const s = document.getElementById('filterStatus').value;
+  const r = document.getElementById('filterRole').value;
+  return allTasks.filter(t =>
+    (!p || t.project === p) &&
+    (!s || t.status === s) &&
+    (!r || t.role === r)
+  );
+}
+
+function renderStats() {
+  const counts = { pending: 0, running: 0, pass: 0, fail: 0, escalated: 0, blocked: 0 };
+  allTasks.forEach(t => {
+    const s = (t.status || '').toLowerCase();
+    if (s in counts) counts[s]++;
+  });
+  const total = allTasks.length;
+  const passRate = total > 0 ? ((counts.pass / total) * 100).toFixed(1) + '%' : '—';
+
+  document.getElementById('statsRow').innerHTML =
+    Object.entries(counts).map(([k, v]) =>
+      '<div class="stat-card ' + k + '"><div class="value">' + v + '</div><div class="label">' + k + '</div></div>'
+    ).join('') +
+    '<div class="stat-card rate"><div class="value">' + passRate + '</div><div class="label">Pass Rate</div></div>';
+}
+
+function renderTaskTable() {
+  const tasks = getFilteredTasks();
+  const tbody = document.getElementById('tasksBody');
+  tbody.innerHTML = '';
+
+  tasks.forEach(t => {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + esc(t.id || t.task_id) + '</td>' +
+      '<td>' + esc(t.project) + '</td>' +
+      '<td class="truncate" title="' + esc(t.goal) + '">' + esc(truncate(t.goal, 60)) + '</td>' +
+      '<td>' + statusBadge(t.status) + '</td>' +
+      '<td>' + esc(t.role || '—') + '</td>' +
+      '<td>' + esc((t.attempt_count || 0) + '/' + (t.max_attempts || '—')) + '</td>' +
+      '<td>' + esc(t.spawned_by || '—') + '</td>' +
+      '<td>' + fmtTime(t.updated_at) + '</td>';
+    tr.addEventListener('click', () => toggleTaskDetail(t, tr));
+    tbody.appendChild(tr);
+
+    // 恢復展開狀態
+    const tid = t.id || t.task_id;
+    if (expandedTaskId === tid) {
+      const detailTr = document.createElement('tr');
+      detailTr.innerHTML = '<td colspan="8">' + buildDetailPanel(t) + '</td>';
+      detailTr.classList.add('detail-row');
+      tbody.appendChild(detailTr);
+    }
+  });
+}
+
+function toggleTaskDetail(task, tr) {
+  const tid = task.id || task.task_id;
+  if (expandedTaskId === tid) {
+    expandedTaskId = null;
+  } else {
+    expandedTaskId = tid;
+  }
+  renderTaskTable();
+}
+
+function buildDetailPanel(t) {
+  const tid = t.id || t.task_id;
+  return '<div class="detail-panel">' +
+    '<div class="detail-row"><div class="detail-label">完整目標</div><div class="detail-value">' + esc(t.goal) + '</div></div>' +
+    '<div class="detail-row"><div class="detail-label">depends_on</div><div class="detail-value">' + esc(JSON.stringify(t.depends_on || [])) + '</div></div>' +
+    '<div class="detail-row"><div class="detail-label">touches</div><div class="detail-value">' + esc(JSON.stringify(t.touches || [])) + '</div></div>' +
+    '<div class="detail-row"><div class="detail-label">error_class</div><div class="detail-value">' + esc(t.error_class || '—') + '</div></div>' +
+    '<div class="detail-row"><div class="detail-label">last_error</div><div class="detail-value"><pre>' + esc(t.last_error || '—') + '</pre></div></div>' +
+    '<button class="btn" onclick="goToRuns(\\'' + esc(tid) + '\\')">查看 Runs</button>' +
+  '</div>';
+}
+
+function goToRuns(taskId) {
+  // 跳到 Prompts tab 並選中該任務
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelector('[data-tab="prompts"]').classList.add('active');
+  document.getElementById('tab-prompts').classList.add('active');
+  selectedPromptTaskId = taskId;
+  loadPromptTasks().then(() => loadRuns(taskId));
+}
+
+// 篩選事件
+['filterProject', 'filterStatus', 'filterRole'].forEach(id => {
+  document.getElementById(id).addEventListener('change', renderTaskTable);
+});
+
+/* ═══════════════════════════════════════
+   Tab 2: Agent 分派鏈 (Graph)
+   ═══════════════════════════════════════ */
+async function loadGraph() {
+  showLoading('graphLoading', true);
+  showEmpty('graphEmpty', false);
+  document.getElementById('graphContainer').innerHTML = '';
+  document.getElementById('graphNodeDetail').style.display = 'none';
+
+  let graphData;
+  try {
+    graphData = await api('/api/graph');
+  } catch (e) {
+    // fallback：從 allTasks 建構圖
+    if (allTasks.length === 0) {
+      try { await loadTasks(); } catch (_) {}
+    }
+    graphData = { nodes: allTasks, edges: [] };
+  }
+
+  showLoading('graphLoading', false);
+
+  const nodes = graphData.nodes || graphData.tasks || graphData || [];
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    showEmpty('graphEmpty', true);
+    return;
+  }
+
+  // 用 edges 建構 DAG，按 project 分組，拓撲排序成層
+  const edges = graphData.edges || [];
+  const nodeMap = {};
+  nodes.forEach(n => { nodeMap[n.id || n.task_id] = n; });
+
+  // 按 project 分組
+  const projectGroups = {};
+  nodes.forEach(n => {
+    const proj = n.project || 'unknown';
+    if (!projectGroups[proj]) projectGroups[proj] = { nodes: [], edges: [] };
+    projectGroups[proj].nodes.push(n);
+  });
+  edges.forEach(e => {
+    const toNode = nodeMap[e.to];
+    if (toNode) {
+      const proj = toNode.project || 'unknown';
+      if (projectGroups[proj]) projectGroups[proj].edges.push(e);
+    }
+  });
+
+  const container = document.getElementById('graphContainer');
+
+  Object.keys(projectGroups).sort().forEach(proj => {
+    const group = projectGroups[proj];
+    const groupDiv = document.createElement('div');
+    groupDiv.className = 'graph-project-group';
+    groupDiv.innerHTML = '<div class="graph-project-title">' + esc(proj) + ' (' + group.nodes.length + ' tasks)</div>';
+
+    const dagDiv = document.createElement('div');
+    dagDiv.className = 'dag-canvas';
+    dagDiv.style.position = 'relative';
+
+    // 拓撲排序成層
+    const layers = topoSort(group.nodes, group.edges);
+
+    // 渲染每一層
+    const cardPositions = {};
+    layers.forEach((layer, layerIdx) => {
+      const layerDiv = document.createElement('div');
+      layerDiv.className = 'dag-layer';
+      layerDiv.innerHTML = '<div class="dag-layer-label">Layer ' + layerIdx + '</div>';
+
+      layer.forEach(n => {
+        const card = document.createElement('div');
+        const status = (n.status || 'pending').toLowerCase();
+        card.className = 'node-card status-' + status;
+        card.setAttribute('data-node-id', n.id);
+        card.innerHTML =
+          '<div class="node-id">' + esc(n.id) + '</div>' +
+          statusBadge(n.status) +
+          '<div class="node-role">' + esc(n.role || '') + '</div>' +
+          '<div class="node-goal">' + esc(truncate(n.goal, 25)) + '</div>';
+        card.addEventListener('click', function(e) {
+          e.stopPropagation();
+          document.querySelectorAll('.node-card.highlighted').forEach(function(c) { c.classList.remove('highlighted'); });
+          card.classList.add('highlighted');
+          showGraphNodeDetail(n);
+        });
+        card.addEventListener('mouseenter', function() { highlightEdges(dagDiv, n.id, true); });
+        card.addEventListener('mouseleave', function() { highlightEdges(dagDiv, n.id, false); });
+        layerDiv.appendChild(card);
+      });
+
+      dagDiv.appendChild(layerDiv);
+    });
+
+    groupDiv.appendChild(dagDiv);
+    container.appendChild(groupDiv);
+
+    // 渲染 SVG 連線（等 DOM layout 完成）
+    requestAnimationFrame(function() {
+      drawEdges(dagDiv, group.edges);
+    });
+  });
+}
+
+function topoSort(nodes, edges) {
+  var idSet = {};
+  nodes.forEach(function(n) { idSet[n.id] = n; });
+  var inDegree = {};
+  var children = {};
+  nodes.forEach(function(n) { inDegree[n.id] = 0; children[n.id] = []; });
+  edges.forEach(function(e) {
+    if (idSet[e.from] && idSet[e.to]) {
+      inDegree[e.to] = (inDegree[e.to] || 0) + 1;
+      children[e.from] = children[e.from] || [];
+      children[e.from].push(e.to);
+    }
+  });
+
+  var layers = [];
+  var queue = [];
+  nodes.forEach(function(n) { if (inDegree[n.id] === 0) queue.push(n); });
+
+  while (queue.length > 0) {
+    layers.push(queue.slice());
+    var next = [];
+    queue.forEach(function(n) {
+      (children[n.id] || []).forEach(function(cid) {
+        inDegree[cid]--;
+        if (inDegree[cid] === 0 && idSet[cid]) next.push(idSet[cid]);
+      });
+    });
+    queue = next;
+  }
+
+  // 處理可能的環（不應該發生，但安全起見）
+  nodes.forEach(function(n) {
+    var found = false;
+    layers.forEach(function(l) { l.forEach(function(ln) { if (ln.id === n.id) found = true; }); });
+    if (!found) {
+      if (layers.length === 0) layers.push([]);
+      layers[layers.length - 1].push(n);
+    }
+  });
+
+  return layers;
+}
+
+function drawEdges(dagDiv, edges) {
+  var svg = dagDiv.querySelector('svg');
+  if (svg) svg.remove();
+
+  var rect = dagDiv.getBoundingClientRect();
+  svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', dagDiv.scrollWidth);
+  svg.setAttribute('height', dagDiv.scrollHeight);
+  svg.style.position = 'absolute';
+  svg.style.top = '0';
+  svg.style.left = '0';
+  svg.style.pointerEvents = 'none';
+  svg.style.zIndex = '1';
+
+  // 箭頭 marker
+  var defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  var marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+  marker.setAttribute('id', 'arrowhead');
+  marker.setAttribute('markerWidth', '8');
+  marker.setAttribute('markerHeight', '6');
+  marker.setAttribute('refX', '8');
+  marker.setAttribute('refY', '3');
+  marker.setAttribute('orient', 'auto');
+  var polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+  polygon.setAttribute('points', '0 0, 8 3, 0 6');
+  polygon.setAttribute('fill', '#4a5568');
+  marker.appendChild(polygon);
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+
+  edges.forEach(function(e) {
+    var fromCard = dagDiv.querySelector('[data-node-id="' + e.from + '"]');
+    var toCard = dagDiv.querySelector('[data-node-id="' + e.to + '"]');
+    if (!fromCard || !toCard) return;
+
+    var dagRect = dagDiv.getBoundingClientRect();
+    var fromRect = fromCard.getBoundingClientRect();
+    var toRect = toCard.getBoundingClientRect();
+
+    var x1 = fromRect.left + fromRect.width / 2 - dagRect.left;
+    var y1 = fromRect.bottom - dagRect.top;
+    var x2 = toRect.left + toRect.width / 2 - dagRect.left;
+    var y2 = toRect.top - dagRect.top;
+
+    var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    var midY = (y1 + y2) / 2;
+    var d = 'M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + midY + ', ' + x2 + ' ' + midY + ', ' + x2 + ' ' + y2;
+    path.setAttribute('d', d);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', '#4a5568');
+    path.setAttribute('stroke-width', '2');
+    path.setAttribute('marker-end', 'url(#arrowhead)');
+    path.setAttribute('data-from', e.from);
+    path.setAttribute('data-to', e.to);
+    path.classList.add('dag-edge');
+    svg.appendChild(path);
+  });
+
+  dagDiv.insertBefore(svg, dagDiv.firstChild);
+}
+
+function highlightEdges(dagDiv, nodeId, on) {
+  var svg = dagDiv.querySelector('svg');
+  if (!svg) return;
+  svg.querySelectorAll('.dag-edge').forEach(function(path) {
+    var from = path.getAttribute('data-from');
+    var to = path.getAttribute('data-to');
+    if (from === nodeId || to === nodeId) {
+      path.setAttribute('stroke', on ? '#00d2d3' : '#4a5568');
+      path.setAttribute('stroke-width', on ? '3' : '2');
+    }
+  });
+}
+
+function showGraphNodeDetail(node) {
+  const el = document.getElementById('graphNodeDetail');
+  el.style.display = 'block';
+  el.innerHTML =
+    '<h3 style="margin-bottom:12px">' + esc(node.id || node.task_id) + ' ' + statusBadge(node.status) + '</h3>' +
+    '<div class="detail-row"><div class="detail-label">目標</div><div class="detail-value">' + esc(node.goal) + '</div></div>' +
+    '<div class="detail-row"><div class="detail-label">角色</div><div class="detail-value">' + esc(node.role || '—') + '</div></div>' +
+    '<div class="detail-row"><div class="detail-label">派生自</div><div class="detail-value">' + esc(node.spawned_by || '—') + '</div></div>' +
+    '<div class="detail-row"><div class="detail-label">depends_on</div><div class="detail-value">' + esc(JSON.stringify(node.depends_on || [])) + '</div></div>' +
+    '<div class="detail-row"><div class="detail-label">error_class</div><div class="detail-value">' + esc(node.error_class || '—') + '</div></div>' +
+    '<div class="detail-row"><div class="detail-label">last_error</div><div class="detail-value"><pre>' + esc(node.last_error || '—') + '</pre></div></div>';
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/* ═══════════════════════════════════════
+   Tab 3: Prompt 檢視器
+   ═══════════════════════════════════════ */
+let promptRunsCache = {};
+
+async function loadPromptTasks() {
+  if (allTasks.length === 0) {
+    try { await loadTasks(); } catch (_) {}
+  }
+
+  const listEl = document.getElementById('promptTaskList');
+  listEl.innerHTML = '';
+
+  // 顯示有 runs 的任務（attempt_count > 0）或全部
+  const tasks = allTasks.filter(t => (t.attempt_count || 0) > 0 || allTasks.length < 50);
+  if (tasks.length === 0) {
+    listEl.innerHTML = '<div class="empty-state"><div class="empty-text">無可用任務</div></div>';
+    return;
+  }
+
+  tasks.forEach(t => {
+    const tid = t.id || t.task_id;
+    const item = document.createElement('div');
+    item.className = 'sidebar-item' + (selectedPromptTaskId === tid ? ' active' : '');
+    item.innerHTML =
+      '<div class="item-id">' + esc(tid) + '</div>' +
+      '<div>' + esc(truncate(t.goal, 40)) + '</div>' +
+      '<div>' + statusBadge(t.status) + '</div>';
+    item.addEventListener('click', () => {
+      selectedPromptTaskId = tid;
+      document.querySelectorAll('.prompt-sidebar .sidebar-item').forEach(i => i.classList.remove('active'));
+      item.classList.add('active');
+      loadRuns(tid);
+    });
+    listEl.appendChild(item);
+  });
+}
+
+async function loadRuns(taskId) {
+  const main = document.getElementById('promptMain');
+  main.innerHTML = '<div class="loading-overlay"><div class="spinner"></div> 載入 Runs…</div>';
+
+  try {
+    const data = await api('/api/tasks/' + encodeURIComponent(taskId) + '/runs');
+    const runs = Array.isArray(data) ? data : (data.runs || []);
+    promptRunsCache[taskId] = runs;
+    renderRuns(runs, taskId);
+  } catch (e) {
+    main.innerHTML = '<div class="empty-state"><div class="empty-text">載入失敗：' + esc(e.message) + '</div></div>';
+  }
+}
+
+function renderRuns(runs, taskId) {
+  const main = document.getElementById('promptMain');
+  const searchTerm = document.getElementById('promptSearch').value.toLowerCase();
+
+  if (runs.length === 0) {
+    main.innerHTML = '<div class="empty-state"><div class="empty-text">此任務尚無執行記錄。</div></div>';
+    return;
+  }
+
+  let html = '<h3 style="margin-bottom:16px">任務 ' + esc(taskId) + ' — ' + runs.length + ' 次執行</h3>';
+
+  runs.forEach((run, i) => {
+    const matchesSearch = !searchTerm ||
+      (run.prompt_text || '').toLowerCase().includes(searchTerm) ||
+      (run.claude_output || '').toLowerCase().includes(searchTerm) ||
+      (run.verify_output || '').toLowerCase().includes(searchTerm);
+
+    if (!matchesSearch) return;
+
+    const attempt = run.attempt || (i + 1);
+    const duration = run.duration ? run.duration + 's' : '—';
+    const time = fmtTime(run.created_at || run.started_at);
+
+    html += '<div class="run-card">' +
+      '<div class="run-header" onclick="toggleRunBody(this)">' +
+        '<div>Attempt #' + attempt + '  ' + statusBadge(run.status) + '  <span style="color:var(--text-dim);font-size:12px">' + duration + '</span></div>' +
+        '<div style="display:flex;align-items:center;gap:8px">' +
+          '<span style="color:var(--text-dim);font-size:12px">' + time + '</span>' +
+          '<button class="expand-btn" data-task="' + esc(taskId) + '" data-run="' + i + '" onclick="event.stopPropagation();expandRun(this)">全螢幕</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="run-body" style="display:none">';
+
+    if (run.prompt_text) {
+      html += '<h4>Prompt</h4>' + renderMarkdown(run.prompt_text);
+    }
+    if (run.claude_output) {
+      var parsed = parseClaudeOutput(run.claude_output);
+      html += '<h4>Claude Output</h4>';
+      if (parsed.duration_ms || parsed.num_turns || parsed.cost) {
+        html += '<div class="md-meta">';
+        if (parsed.duration_ms) html += '<span><span class="label">耗時</span> <span class="value">' + (parsed.duration_ms / 1000).toFixed(1) + 's</span></span>';
+        if (parsed.num_turns) html += '<span><span class="label">輪次</span> <span class="value">' + parsed.num_turns + '</span></span>';
+        if (parsed.cost) html += '<span><span class="label">成本</span> <span class="value">$' + parsed.cost.toFixed(4) + '</span></span>';
+        if (parsed.is_error) html += '<span style="color:var(--error)">ERROR</span>';
+        html += '</div>';
+      }
+      if (parsed.summary) {
+        html += renderMarkdown(parsed.summary);
+      } else {
+        html += '<pre>' + esc(run.claude_output) + '</pre>';
+      }
+    }
+    if (run.verify_output) {
+      html += '<h4>Verify Output</h4><pre>' + esc(run.verify_output) + '</pre>';
+    }
+
+    html += '</div></div>';
+  });
+
+  main.innerHTML = html;
+}
+
+function toggleRunBody(header) {
+  const body = header.nextElementSibling;
+  body.style.display = body.style.display === 'none' ? 'block' : 'none';
+}
+
+function highlightText(text, term) {
+  const escaped = esc(text);
+  if (!term) return escaped;
+  const regex = new RegExp('(' + term.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&') + ')', 'gi');
+  return escaped.replace(regex, '<mark>$1</mark>');
+}
+
+// 搜尋事件
+document.getElementById('promptSearch').addEventListener('input', () => {
+  if (selectedPromptTaskId && promptRunsCache[selectedPromptTaskId]) {
+    renderRuns(promptRunsCache[selectedPromptTaskId], selectedPromptTaskId);
+  }
+});
+
+/* ═══════════════════════════════════════
+   Tab 4: Audit Log
+   ═══════════════════════════════════════ */
+async function loadAudit() {
+  showLoading('auditLoading', true);
+  showEmpty('auditEmpty', false);
+
+  try {
+    const data = await api('/api/audit');
+    allAuditLogs = Array.isArray(data) ? data : (data.events || data.logs || []);
+    populateAuditFilters();
+    renderAuditTimeline();
+  } catch (e) {
+    console.error('載入審計日誌失敗:', e);
+    allAuditLogs = [];
+  }
+
+  showLoading('auditLoading', false);
+  if (allAuditLogs.length === 0) showEmpty('auditEmpty', true);
+}
+
+function populateAuditFilters() {
+  const types = [...new Set(allAuditLogs.map(e => e.event_type).filter(Boolean))];
+  fillSelect('auditFilterType', types, '所有事件類型');
+}
+
+function getFilteredAuditLogs() {
+  const typeFilter = document.getElementById('auditFilterType').value;
+  const taskFilter = document.getElementById('auditFilterTask').value.toLowerCase();
+  return allAuditLogs.filter(e =>
+    (!typeFilter || e.event_type === typeFilter) &&
+    (!taskFilter || (e.task_id || '').toLowerCase().includes(taskFilter))
+  );
+}
+
+function renderAuditTimeline() {
+  const logs = getFilteredAuditLogs();
+  const container = document.getElementById('auditTimeline');
+
+  if (logs.length === 0) {
+    container.innerHTML = '';
+    showEmpty('auditEmpty', true);
+    return;
+  }
+  showEmpty('auditEmpty', false);
+
+  // 最新在上
+  const sorted = [...logs].sort((a, b) => {
+    const ta = new Date(a.timestamp || a.created_at || 0);
+    const tb = new Date(b.timestamp || b.created_at || 0);
+    return tb - ta;
+  });
+
+  container.innerHTML = sorted.map(ev => {
+    const time = fmtTime(ev.timestamp || ev.created_at);
+    const taskLink = ev.task_id
+      ? '<span class="tl-task-link" onclick="goToTaskFromAudit(\\'' + esc(ev.task_id) + '\\')">' + esc(ev.task_id) + '</span>'
+      : '';
+    const eventData = ev.event_data ? JSON.stringify(ev.event_data, null, 2) : '';
+
+    return '<div class="timeline-item">' +
+      '<div class="timeline-card">' +
+        '<div class="tl-header">' +
+          '<div>' + eventBadge(ev.event_type) + ' ' + taskLink + '</div>' +
+          '<div><span class="tl-actor">' + esc(ev.actor || '') + '</span> <span class="tl-time">' + time + '</span></div>' +
+        '</div>' +
+        (eventData ? '<details><summary style="cursor:pointer;font-size:12px;color:var(--text-dim);margin-top:4px">展開事件資料</summary><pre style="margin-top:8px;font-size:11px">' + esc(eventData) + '</pre></details>' : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function goToTaskFromAudit(taskId) {
+  // 跳到任務總覽 tab 並展開該任務
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelector('[data-tab="tasks"]').classList.add('active');
+  document.getElementById('tab-tasks').classList.add('active');
+  expandedTaskId = taskId;
+  renderTaskTable();
+}
+
+// 審計篩選事件
+document.getElementById('auditFilterType').addEventListener('change', renderAuditTimeline);
+document.getElementById('auditFilterTask').addEventListener('input', renderAuditTimeline);
+
+/* ═══════════════════════════════════════
+   自動刷新
+   ═══════════════════════════════════════ */
+function startAutoRefresh() {
+  stopAutoRefresh();
+  autoRefreshInterval = setInterval(() => {
+    const activeTab = document.querySelector('.tab-btn.active');
+    if (!activeTab) return;
+    const tab = activeTab.dataset.tab;
+    if (tab === 'tasks') loadTasks();
+    else if (tab === 'audit') loadAudit();
+    // graph 和 prompts 不自動刷新（較重）
+  }, 5000);
+}
+
+function stopAutoRefresh() {
+  if (autoRefreshInterval) {
+    clearInterval(autoRefreshInterval);
+    autoRefreshInterval = null;
+  }
+}
+
+document.getElementById('autoRefreshToggle').addEventListener('change', function() {
+  if (this.checked) startAutoRefresh();
+  else stopAutoRefresh();
+});
+
+/* ═══════════════════════════════════════
+   初始化
+   ═══════════════════════════════════════ */
+loadTasks();
+startAutoRefresh();
+
+/* ═══════════════════════════════════════
+   全螢幕 Modal
+   ═══════════════════════════════════════ */
+function openModal(title, contentHtml) {
+  const overlay = document.getElementById('modalOverlay');
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalBody').innerHTML = contentHtml;
+  overlay.classList.add('active');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('active');
+  document.body.style.overflow = '';
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeModal();
+});
+
+function expandRun(btn) {
+  var tid = btn.getAttribute('data-task');
+  var idx = parseInt(btn.getAttribute('data-run'), 10);
+  var run = promptRunsCache[tid] && promptRunsCache[tid][idx];
+  if (run) openRunModal(tid, run);
+}
+
+function openRunModal(taskId, run) {
+  var html = '';
+  if (run.prompt_text) {
+    html += '<h4>Prompt</h4>' + renderMarkdown(run.prompt_text);
+  }
+  if (run.claude_output) {
+    var parsed = parseClaudeOutput(run.claude_output);
+    html += '<h4>Claude Output</h4>';
+    if (parsed.duration_ms || parsed.num_turns || parsed.cost) {
+      html += '<div class="md-meta">';
+      if (parsed.duration_ms) html += '<span><span class="label">耗時</span> <span class="value">' + (parsed.duration_ms / 1000).toFixed(1) + 's</span></span>';
+      if (parsed.num_turns) html += '<span><span class="label">輪次</span> <span class="value">' + parsed.num_turns + '</span></span>';
+      if (parsed.cost) html += '<span><span class="label">成本</span> <span class="value">$' + parsed.cost.toFixed(4) + '</span></span>';
+      html += '</div>';
+    }
+    html += parsed.summary ? renderMarkdown(parsed.summary) : '<pre>' + esc(run.claude_output) + '</pre>';
+    if (parsed.detail) {
+      html += '<h4>Raw JSON</h4><pre>' + esc(JSON.stringify(JSON.parse(run.claude_output), null, 2)) + '</pre>';
+    }
+  }
+  if (run.verify_output) {
+    html += '<h4>Verify Output</h4><pre>' + esc(run.verify_output) + '</pre>';
+  }
+  if (!html) html = '<div class="empty-state"><div class="empty-text">此 run 沒有記錄任何內容。</div></div>';
+  var attempt = run.attempt || '?';
+  openModal(taskId + ' — Attempt #' + attempt + ' (' + (run.status || '?') + ')', html);
+}
+</script>
+
+<!-- Modal 容器 -->
+<div class="modal-overlay" id="modalOverlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3 id="modalTitle"></h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+</body>
+</html>"""
+
+# ── 路徑設定 ──────────────────────────────────────────────
+
+def _resolve_db_path() -> str:
+    """優先順序：環境變數 > ~/.agent-harness/db > 腳本同層目錄/db"""
+    env = os.environ.get("AGENT_DB_PATH")
+    if env:
+        return env
+    home_db = Path.home() / ".agent-harness" / "db" / "agent.db"
+    if home_db.exists():
+        return str(home_db)
+    return str(Path(__file__).resolve().parent / "db" / "agent.db")
+
+DB_PATH = _resolve_db_path()
+
+# ── DB 工具 ───────────────────────────────────────────────
+
+def get_connection():
+    """取得 SQLite 連線，DB 不存在時回傳 None。"""
+    if not Path(DB_PATH).exists():
+        return None
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def safe_query(conn, sql, params=()):
+    """安全查詢，忽略 table 不存在等錯誤。"""
+    try:
+        return conn.execute(sql, params).fetchall()
+    except (sqlite3.OperationalError, sqlite3.DatabaseError):
+        return []
+
+
+def safe_query_one(conn, sql, params=()):
+    try:
+        return conn.execute(sql, params).fetchone()
+    except (sqlite3.OperationalError, sqlite3.DatabaseError):
+        return None
+
+
+def row_to_dict(row):
+    """將 sqlite3.Row 轉換為 dict。"""
+    if row is None:
+        return None
+    return dict(row)
+
+
+def rows_to_list(rows):
+    """將 sqlite3.Row list 轉換為 dict list。"""
+    return [dict(r) for r in rows]
+
+
+def parse_json_field(value):
+    """嘗試將 JSON 字串 parse 成 Python 物件，失敗時回傳原值。"""
+    if value is None:
+        return None
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return value
+
+
+# ── API 處理 ─────────────────────────────────────────────
+
+def handle_stats():
+    """GET /api/stats"""
+    conn = get_connection()
+    if conn is None:
+        return {"counts": {}, "pass_rate": 0, "total_runs": 0, "total_duration": 0}
+
+    try:
+        # 各 status 的任務數量
+        counts = {}
+        for status in ("pending", "running", "pass", "fail", "escalated", "skipped", "blocked"):
+            r = safe_query_one(conn, "SELECT COUNT(*) AS cnt FROM tasks WHERE status = ?", (status,))
+            counts[status] = r["cnt"] if r else 0
+
+        # runs 統計
+        stats = safe_query_one(conn, """
+            SELECT
+                COUNT(*) AS total_runs,
+                SUM(CASE WHEN status = 'pass' THEN 1 ELSE 0 END) AS pass_count,
+                SUM(CASE WHEN status IN ('pass', 'fail', 'error') THEN 1 ELSE 0 END) AS completed,
+                COALESCE(SUM(duration_sec), 0) AS total_duration
+            FROM runs
+        """)
+
+        total_runs = 0
+        pass_rate = 0
+        total_duration = 0
+        if stats:
+            total_runs = stats["total_runs"] or 0
+            completed = stats["completed"] or 0
+            pass_count = stats["pass_count"] or 0
+            pass_rate = round(pass_count / completed * 100, 1) if completed > 0 else 0
+            total_duration = stats["total_duration"] or 0
+
+        return {
+            "counts": counts,
+            "pass_rate": pass_rate,
+            "total_runs": total_runs,
+            "total_duration": total_duration,
+        }
+    finally:
+        conn.close()
+
+
+def handle_tasks(query_params):
+    """GET /api/tasks"""
+    conn = get_connection()
+    if conn is None:
+        return []
+
+    try:
+        sql = "SELECT * FROM tasks WHERE 1=1"
+        params = []
+
+        project = query_params.get("project", [None])[0]
+        if project:
+            sql += " AND project = ?"
+            params.append(project)
+
+        status = query_params.get("status", [None])[0]
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+
+        role = query_params.get("role", [None])[0]
+        if role:
+            sql += " AND role = ?"
+            params.append(role)
+
+        sql += " ORDER BY created_at DESC"
+        rows = safe_query(conn, sql, params)
+
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["depends_on"] = parse_json_field(d.get("depends_on"))
+            d["touches"] = parse_json_field(d.get("touches"))
+            result.append(d)
+        return result
+    finally:
+        conn.close()
+
+
+def handle_task_detail(task_id):
+    """GET /api/tasks/<id>"""
+    conn = get_connection()
+    if conn is None:
+        return None
+
+    try:
+        row = safe_query_one(conn, "SELECT * FROM tasks WHERE id = ?", (task_id,))
+        if row is None:
+            return None
+        d = dict(row)
+        d["depends_on"] = parse_json_field(d.get("depends_on"))
+        d["touches"] = parse_json_field(d.get("touches"))
+        return d
+    finally:
+        conn.close()
+
+
+def handle_task_runs(task_id):
+    """GET /api/tasks/<id>/runs"""
+    conn = get_connection()
+    if conn is None:
+        return []
+
+    try:
+        rows = safe_query(conn, """
+            SELECT id, attempt, status, worker_id, prompt_text, claude_output,
+                   verify_output, error_class, duration_sec, started_at, finished_at,
+                   output_fingerprint, input_prompt_hash
+            FROM runs
+            WHERE task_id = ?
+            ORDER BY attempt ASC
+        """, (task_id,))
+        return rows_to_list(rows)
+    finally:
+        conn.close()
+
+
+def handle_graph():
+    """GET /api/graph — 任務關係圖（spawned_by + depends_on）。"""
+    conn = get_connection()
+    if conn is None:
+        return {"nodes": [], "edges": []}
+
+    try:
+        all_tasks = safe_query(conn, """
+            SELECT id, project, goal, status, role, spawned_by, depends_on
+            FROM tasks
+        """)
+
+        if not all_tasks:
+            return {"nodes": [], "edges": []}
+
+        node_map = {}
+        edges = []
+
+        # 收集所有有關係的任務 ID
+        related_ids = set()
+        for t in all_tasks:
+            has_relation = False
+            # spawned_by 關係
+            if t["spawned_by"]:
+                related_ids.add(t["id"])
+                related_ids.add(t["spawned_by"])
+                edges.append({"from": t["spawned_by"], "to": t["id"], "type": "spawned"})
+                has_relation = True
+            # depends_on 關係
+            deps = parse_json_field(t["depends_on"])
+            if deps:
+                related_ids.add(t["id"])
+                for dep_id in deps:
+                    related_ids.add(dep_id)
+                    edges.append({"from": dep_id, "to": t["id"], "type": "depends"})
+                has_relation = True
+
+        # 建立 node 清單（只包含有關係的任務）
+        for t in all_tasks:
+            if t["id"] in related_ids:
+                node_map[t["id"]] = {
+                    "id": t["id"],
+                    "project": t["project"],
+                    "goal": t["goal"],
+                    "status": t["status"],
+                    "role": t["role"],
+                }
+
+        return {"nodes": list(node_map.values()), "edges": edges}
+    finally:
+        conn.close()
+
+
+def handle_audit(query_params):
+    """GET /api/audit"""
+    conn = get_connection()
+    if conn is None:
+        return []
+
+    try:
+        sql = "SELECT * FROM audit_log WHERE 1=1"
+        params = []
+
+        task_id = query_params.get("task_id", [None])[0]
+        if task_id:
+            sql += " AND task_id = ?"
+            params.append(task_id)
+
+        event_type = query_params.get("event_type", [None])[0]
+        if event_type:
+            sql += " AND event_type = ?"
+            params.append(event_type)
+
+        sql += " ORDER BY created_at DESC"
+        rows = safe_query(conn, sql, params)
+
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["event_data"] = parse_json_field(d.get("event_data"))
+            result.append(d)
+        return result
+    finally:
+        conn.close()
+
+
+def handle_pipelines():
+    """GET /api/pipelines"""
+    conn = get_connection()
+    if conn is None:
+        return []
+
+    try:
+        rows = safe_query(conn, "SELECT * FROM pipelines ORDER BY created_at DESC")
+        return rows_to_list(rows)
+    finally:
+        conn.close()
+
+
+def handle_router_decisions():
+    """GET /api/router-decisions"""
+    conn = get_connection()
+    if conn is None:
+        return []
+
+    try:
+        rows = safe_query(conn, "SELECT * FROM router_decisions ORDER BY created_at DESC")
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["task_ids"] = parse_json_field(d.get("task_ids"))
+            result.append(d)
+        return result
+    finally:
+        conn.close()
+
+
+# ── URL Routing ──────────────────────────────────────────
+
+ROUTES = [
+    (re.compile(r"^/api/stats$"), "GET", handle_stats),
+    (re.compile(r"^/api/tasks$"), "GET", handle_tasks),
+    (re.compile(r"^/api/tasks/([^/]+)/runs$"), "GET", handle_task_runs),
+    (re.compile(r"^/api/tasks/([^/]+)$"), "GET", handle_task_detail),
+    (re.compile(r"^/api/graph$"), "GET", handle_graph),
+    (re.compile(r"^/api/audit$"), "GET", handle_audit),
+    (re.compile(r"^/api/pipelines$"), "GET", handle_pipelines),
+    (re.compile(r"^/api/router-decisions$"), "GET", handle_router_decisions),
+]
+
+
+# ── HTTP Handler ─────────────────────────────────────────
+
+class APIHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query_params = parse_qs(parsed.query)
+
+        # 根路徑回傳內嵌儀表板 HTML
+        if path == "/" or path == "":
+            self._send_html(DASHBOARD_HTML)
+            return
+
+        for pattern, method, handler in ROUTES:
+            match = pattern.match(path)
+            if match and method == "GET":
+                try:
+                    groups = match.groups()
+                    # 根據 handler 參數數量決定如何呼叫
+                    if groups and handler in (handle_task_detail, handle_task_runs):
+                        result = handler(groups[0])
+                    elif handler in (handle_tasks, handle_audit):
+                        result = handler(query_params)
+                    else:
+                        result = handler()
+
+                    if result is None:
+                        self._send_json({"error": "not found"}, 404)
+                    else:
+                        self._send_json(result)
+                except Exception as e:
+                    self._send_json({"error": str(e)}, 500)
+                return
+
+        self._send_json({"error": "not found"}, 404)
+
+    def do_OPTIONS(self):
+        """處理 CORS preflight 請求。"""
+        self.send_response(200)
+        self._set_cors_headers()
+        self.end_headers()
+
+    def _send_json(self, data, status=200):
+        body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self._set_cors_headers()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_html(self, html, status=200):
+        body = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self._set_cors_headers()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _set_cors_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def log_message(self, format, *args):
+        """覆寫預設 log，加上時間戳。"""
+        sys.stderr.write(f"[{time.strftime('%H:%M:%S')}] {args[0]}\n")
+
+
+# ── 自我測試 ─────────────────────────────────────────────
+
+def run_self_check(port):
+    """啟動 server 在背景線程，打幾個 API 確認回傳格式，然後退出。"""
+    from urllib.request import urlopen
+    from urllib.error import URLError
+
+    server = HTTPServer(("127.0.0.1", port), APIHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    # 等待 server 就緒
+    time.sleep(0.3)
+
+    # 測試 GET / 回傳 HTML 儀表板
+    all_ok = True
+    try:
+        resp = urlopen(f"http://127.0.0.1:{port}/", timeout=5)
+        if resp.status != 200:
+            print(f"FAIL /: HTTP {resp.status}")
+            all_ok = False
+        else:
+            body = resp.read().decode("utf-8")
+            content_type = resp.headers.get("Content-Type", "")
+            if "text/html" not in content_type:
+                print(f"FAIL /: Content-Type = {content_type}")
+                all_ok = False
+            elif "<!DOCTYPE html>" not in body:
+                print(f"FAIL /: HTML 內容不完整")
+                all_ok = False
+            else:
+                print(f"  OK / → HTML ({len(body)} bytes)")
+    except (URLError, Exception) as e:
+        print(f"FAIL /: {e}")
+        all_ok = False
+
+    # 測試 JSON API 端點
+    endpoints = [
+        "/api/stats",
+        "/api/tasks",
+        "/api/graph",
+        "/api/audit",
+        "/api/pipelines",
+        "/api/router-decisions",
+    ]
+
+    for ep in endpoints:
+        url = f"http://127.0.0.1:{port}{ep}"
+        try:
+            resp = urlopen(url, timeout=5)
+            if resp.status != 200:
+                print(f"FAIL {ep}: HTTP {resp.status}")
+                all_ok = False
+                continue
+
+            body = resp.read().decode("utf-8")
+            data = json.loads(body)
+
+            content_type = resp.headers.get("Content-Type", "")
+            if "application/json" not in content_type:
+                print(f"FAIL {ep}: Content-Type = {content_type}")
+                all_ok = False
+                continue
+
+            cors = resp.headers.get("Access-Control-Allow-Origin", "")
+            if cors != "*":
+                print(f"FAIL {ep}: CORS header missing")
+                all_ok = False
+                continue
+
+            print(f"  OK {ep} → {type(data).__name__}")
+        except (URLError, json.JSONDecodeError, Exception) as e:
+            print(f"FAIL {ep}: {e}")
+            all_ok = False
+
+    server.shutdown()
+
+    if all_ok:
+        print("\n自我測試通過 ✓")
+        sys.exit(0)
+    else:
+        print("\n自我測試失敗 ✗")
+        sys.exit(1)
+
+
+# ── 主程式 ────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="web-dashboard",
+        description="Agent Harness REST API server — 提供 JSON API 供前端儀表板使用",
+    )
+    parser.add_argument("--port", type=int, default=8745, help="監聽 port（預設 8745）")
+    parser.add_argument("--check", action="store_true", help="自我測試模式：啟動 server → 驗證 API → 退出")
+    args = parser.parse_args()
+
+    if args.check:
+        print(f"自我測試模式：port {args.port}")
+        run_self_check(args.port)
+        return
+
+    server = HTTPServer(("0.0.0.0", args.port), APIHandler)
+    print(f"Web Dashboard 啟動於 http://localhost:{args.port}")
+    print(f"儀表板：http://localhost:{args.port}/")
+    print(f"DB 路徑：{DB_PATH}")
+    print("按 Ctrl+C 停止")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nServer 已停止。")
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()
