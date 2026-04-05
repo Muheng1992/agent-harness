@@ -29,34 +29,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agent Harness — 追溯儀表板</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 /* ── 全域重置與基礎 ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg: #1a1a2e;
-  --card: #16213e;
-  --accent: #0f3460;
-  --error: #e94560;
-  --text: #e0e0e0;
-  --text-dim: #8892a4;
-  --border: #2a2a4a;
-  --success: #2ecc71;
-  --amber: #f0a500;
-  --cyan: #00d2d3;
-  --blue: #3498db;
-  --gray: #7f8c8d;
-  --red-bold: #ff2e63;
-  --radius: 8px;
-  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  --bg: #09090b;
+  --card: #18181b;
+  --accent: #27272a;
+  --error: #ef4444;
+  --text: #fafafa;
+  --text-dim: #a1a1aa;
+  --border: #3f3f46;
+  --success: #22c55e;
+  --amber: #eab308;
+  --highlight: #e4e4e7;
+  --neutral: #a1a1aa;
+  --gray: #71717a;
+  --red-bold: #ef4444;
+  --radius: 12px;
+  --mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
 }
 html, body { height: 100%; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: var(--bg);
   color: var(--text);
   line-height: 1.5;
 }
-a { color: var(--cyan); text-decoration: none; }
+a { color: var(--highlight); text-decoration: none; }
 a:hover { text-decoration: underline; }
 pre, code { font-family: var(--mono); }
 
@@ -74,13 +75,13 @@ pre, code { font-family: var(--mono); }
   z-index: 100;
 }
 .topbar h1 { font-size: 18px; font-weight: 600; }
-.topbar h1 span { color: var(--cyan); }
+.topbar h1 span { color: var(--highlight); }
 .topbar-controls { display: flex; align-items: center; gap: 12px; }
 .auto-refresh-toggle {
   display: flex; align-items: center; gap: 6px;
   font-size: 13px; color: var(--text-dim); cursor: pointer; user-select: none;
 }
-.auto-refresh-toggle input { accent-color: var(--cyan); }
+.auto-refresh-toggle input { accent-color: var(--highlight); }
 
 /* ── Tab 列 ── */
 .tabs {
@@ -100,7 +101,7 @@ pre, code { font-family: var(--mono); }
   transition: all .2s;
 }
 .tab-btn:hover { color: var(--text); }
-.tab-btn.active { color: var(--cyan); border-bottom-color: var(--cyan); }
+.tab-btn.active { color: var(--highlight); border-bottom-color: var(--highlight); }
 
 /* ── 內容區 ── */
 .tab-content { display: none; padding: 24px; min-height: calc(100vh - 112px); overflow-y: auto; max-height: calc(100vh - 112px); }
@@ -119,16 +120,17 @@ pre, code { font-family: var(--mono); }
   border-radius: var(--radius);
   padding: 16px;
   text-align: center;
+  box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.04);
 }
-.stat-card .value { font-size: 28px; font-weight: 700; }
+.stat-card .value { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
 .stat-card .label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; margin-top: 4px; }
 .stat-card.pending .value { color: var(--amber); }
-.stat-card.running .value { color: var(--cyan); }
+.stat-card.running .value { color: var(--success); }
 .stat-card.pass .value { color: var(--success); }
 .stat-card.fail .value { color: var(--error); }
 .stat-card.escalated .value { color: var(--red-bold); }
-.stat-card.blocked .value { color: var(--blue); }
-.stat-card.rate .value { color: var(--cyan); }
+.stat-card.blocked .value { color: var(--neutral); }
+.stat-card.rate .value { color: var(--highlight); }
 
 /* ── 篩選列 ── */
 .filter-row {
@@ -147,7 +149,7 @@ pre, code { font-family: var(--mono); }
   font-size: 13px;
   min-width: 160px;
 }
-.filter-row select:focus, .filter-row input:focus { outline: none; border-color: var(--cyan); }
+.filter-row select:focus, .filter-row input:focus { outline: none; border-color: var(--highlight); }
 
 /* ── 表格 ── */
 .task-table {
@@ -173,11 +175,12 @@ pre, code { font-family: var(--mono); }
   vertical-align: top;
 }
 .task-table tr { cursor: pointer; transition: background .15s; }
-.task-table tbody tr:hover { background: rgba(15, 52, 96, .3); }
+.task-table tbody tr:hover { background: rgba(255,255,255,0.03); }
 
 /* ── Status 標籤 ── */
 .status-badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
   padding: 2px 10px;
   border-radius: 12px;
   font-size: 11px;
@@ -185,13 +188,14 @@ pre, code { font-family: var(--mono); }
   text-transform: uppercase;
   letter-spacing: .3px;
 }
-.status-badge.pending   { background: rgba(240,165,0,.15); color: var(--amber); }
-.status-badge.running   { background: rgba(0,210,211,.15); color: var(--cyan); }
-.status-badge.pass      { background: rgba(46,204,113,.15); color: var(--success); }
-.status-badge.fail      { background: rgba(233,69,96,.15); color: var(--error); }
-.status-badge.escalated { background: rgba(255,46,99,.2); color: var(--red-bold); font-weight: 800; }
-.status-badge.skipped   { background: rgba(127,140,141,.15); color: var(--gray); }
-.status-badge.blocked   { background: rgba(52,152,219,.15); color: var(--blue); }
+.status-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; margin-right: 6px; }
+.status-badge.pending   { background: rgba(234,179,8,0.1); color: var(--amber); border: 1px solid rgba(234,179,8,0.15); }
+.status-badge.running   { background: rgba(34,197,94,0.1); color: var(--success); border: 1px solid rgba(34,197,94,0.15); }
+.status-badge.pass      { background: rgba(34,197,94,0.1); color: var(--success); border: 1px solid rgba(34,197,94,0.15); }
+.status-badge.fail      { background: rgba(239,68,68,0.1); color: var(--error); border: 1px solid rgba(239,68,68,0.15); }
+.status-badge.escalated { background: rgba(239,68,68,0.15); color: var(--red-bold); font-weight: 800; border: 1px solid rgba(239,68,68,0.2); }
+.status-badge.skipped   { background: rgba(127,140,141,.15); color: var(--gray); border: 1px solid rgba(127,140,141,0.12); }
+.status-badge.blocked   { background: rgba(161,161,170,0.08); color: var(--neutral); border: 1px solid rgba(161,161,170,0.12); }
 
 /* ── 詳情面板 ── */
 .detail-panel {
@@ -200,6 +204,7 @@ pre, code { font-family: var(--mono); }
   border-radius: var(--radius);
   padding: 20px;
   margin: 8px 0 16px 0;
+  box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.04);
   animation: slideDown .2s ease;
 }
 @keyframes slideDown {
@@ -232,7 +237,7 @@ pre, code { font-family: var(--mono); }
   cursor: pointer;
   transition: background .2s;
 }
-.btn:hover { background: var(--cyan); color: var(--bg); }
+.btn:hover { background: var(--highlight); color: var(--bg); }
 
 /* ── Graph Tab ── */
 .graph-container { padding: 20px; overflow: auto; -webkit-overflow-scrolling: touch; max-height: calc(100vh - 200px); }
@@ -277,18 +282,18 @@ pre, code { font-family: var(--mono); }
   position: relative;
   z-index: 2;
 }
-.node-card:hover { border-color: var(--cyan); transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,210,211,.15); }
-.node-card.highlighted { border-color: var(--cyan); box-shadow: 0 0 12px rgba(0,210,211,.3); }
+.node-card:hover { border-color: var(--highlight); transform: translateY(-2px); box-shadow: 0 4px 16px rgba(228,228,231,0.1); }
+.node-card.highlighted { border-color: var(--highlight); box-shadow: 0 0 12px rgba(228,228,231,0.15); }
 .node-card .node-id { font-size: 11px; font-weight: 600; color: var(--text); margin-bottom: 2px; word-break: break-all; }
 .node-card .node-role { font-size: 10px; color: var(--text-dim); margin-top: 3px; }
 .node-card .node-goal { font-size: 11px; margin-top: 4px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
 .node-card.status-pending   { border-left: 4px solid var(--amber); }
-.node-card.status-running   { border-left: 4px solid var(--cyan); }
+.node-card.status-running   { border-left: 4px solid var(--success); }
 .node-card.status-pass      { border-left: 4px solid var(--success); }
 .node-card.status-fail      { border-left: 4px solid var(--error); }
 .node-card.status-escalated { border-left: 4px solid var(--red-bold); }
 .node-card.status-skipped   { border-left: 4px solid var(--gray); }
-.node-card.status-blocked   { border-left: 4px solid var(--blue); }
+.node-card.status-blocked   { border-left: 4px solid var(--neutral); }
 
 /* 按 project 分組 */
 .graph-project-group {
@@ -296,12 +301,12 @@ pre, code { font-family: var(--mono); }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 20px;
-  background: rgba(22, 33, 62, .3);
+  background: rgba(255,255,255,0.02);
 }
 .graph-project-title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--cyan);
+  color: var(--highlight);
   margin-bottom: 16px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
@@ -339,8 +344,8 @@ pre, code { font-family: var(--mono); }
   transition: all .15s;
   font-size: 13px;
 }
-.prompt-sidebar .sidebar-item:hover { background: rgba(15, 52, 96, .3); }
-.prompt-sidebar .sidebar-item.active { background: rgba(15, 52, 96, .5); border-left-color: var(--cyan); }
+.prompt-sidebar .sidebar-item:hover { background: rgba(255,255,255,0.03); }
+.prompt-sidebar .sidebar-item.active { background: rgba(255,255,255,0.05); border-left-color: var(--highlight); }
 .prompt-sidebar .sidebar-item .item-id { color: var(--text-dim); font-size: 11px; }
 .prompt-main {
   background: var(--card);
@@ -362,7 +367,7 @@ pre, code { font-family: var(--mono); }
   border-radius: var(--radius);
   font-size: 13px;
 }
-.prompt-search input:focus { outline: none; border-color: var(--cyan); }
+.prompt-search input:focus { outline: none; border-color: var(--highlight); }
 
 .run-card {
   background: var(--bg);
@@ -379,7 +384,7 @@ pre, code { font-family: var(--mono); }
   cursor: pointer;
   transition: background .15s;
 }
-.run-header:hover { background: rgba(15, 52, 96, .2); }
+.run-header:hover { background: rgba(255,255,255,0.03); }
 .run-body { padding: 0 16px 16px; }
 .run-body h4 { font-size: 12px; color: var(--text-dim); text-transform: uppercase; margin: 12px 0 6px; }
 
@@ -433,15 +438,15 @@ pre, code { font-family: var(--mono); }
   font-size: 11px;
   font-weight: 600;
 }
-.event-badge.task_created   { background: rgba(0,210,211,.15); color: var(--cyan); }
-.event-badge.task_started   { background: rgba(0,210,211,.15); color: var(--cyan); }
+.event-badge.task_created   { background: rgba(228,228,231,0.1); color: var(--highlight); }
+.event-badge.task_started   { background: rgba(228,228,231,0.1); color: var(--highlight); }
 .event-badge.task_completed { background: rgba(46,204,113,.15); color: var(--success); }
 .event-badge.task_failed    { background: rgba(233,69,96,.15); color: var(--error); }
 .event-badge.task_escalated { background: rgba(255,46,99,.2); color: var(--red-bold); }
-.event-badge.run_started    { background: rgba(52,152,219,.15); color: var(--blue); }
+.event-badge.run_started    { background: rgba(161,161,170,0.1); color: var(--neutral); }
 .event-badge.run_completed  { background: rgba(46,204,113,.15); color: var(--success); }
 .event-badge.default        { background: rgba(127,140,141,.15); color: var(--gray); }
-.tl-task-link { color: var(--cyan); cursor: pointer; font-size: 12px; }
+.tl-task-link { color: var(--highlight); cursor: pointer; font-size: 12px; }
 .tl-task-link:hover { text-decoration: underline; }
 
 /* ── Loading / Empty ── */
@@ -449,7 +454,7 @@ pre, code { font-family: var(--mono); }
   display: inline-block;
   width: 24px; height: 24px;
   border: 3px solid var(--border);
-  border-top-color: var(--cyan);
+  border-top-color: var(--highlight);
   border-radius: 50%;
   animation: spin .6s linear infinite;
 }
@@ -530,7 +535,7 @@ mark { background: rgba(240,165,0,.3); color: var(--text); padding: 0 2px; borde
 }
 .modal-body h4 {
   font-size: 13px;
-  color: var(--cyan);
+  color: var(--highlight);
   text-transform: uppercase;
   margin: 20px 0 8px;
   padding-bottom: 4px;
@@ -540,16 +545,16 @@ mark { background: rgba(240,165,0,.3); color: var(--text); padding: 0 2px; borde
 
 /* Prompt 區塊的展開按鈕 */
 .expand-btn {
-  background: rgba(15, 52, 96, .5);
+  background: rgba(255,255,255,0.05);
   border: 1px solid var(--border);
-  color: var(--cyan);
+  color: var(--highlight);
   font-size: 11px;
   padding: 4px 10px;
   border-radius: 4px;
   cursor: pointer;
   margin-left: 8px;
 }
-.expand-btn:hover { background: rgba(15, 52, 96, .8); }
+.expand-btn:hover { background: rgba(255,255,255,0.08); }
 
 /* ── 表格、pre 的滾動 ── */
 .task-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -560,7 +565,7 @@ mark { background: rgba(240,165,0,.3); color: var(--text); padding: 0 2px; borde
 .md-content p.md-p { margin-bottom: 8px; }
 .md-content strong { color: var(--text); font-weight: 600; }
 .md-content em { font-style: italic; color: var(--text-dim); }
-.md-content .md-h { color: var(--cyan); margin: 16px 0 8px; font-weight: 600; }
+.md-content .md-h { color: var(--highlight); margin: 16px 0 8px; font-weight: 600; }
 h3.md-h { font-size: 18px; }
 h4.md-h { font-size: 16px; }
 h5.md-h { font-size: 14px; }
@@ -1087,7 +1092,7 @@ function drawEdges(dagDiv, edges) {
   marker.setAttribute('orient', 'auto');
   var polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
   polygon.setAttribute('points', '0 0, 8 3, 0 6');
-  polygon.setAttribute('fill', '#4a5568');
+  polygon.setAttribute('fill', '#3f3f46');
   marker.appendChild(polygon);
   defs.appendChild(marker);
   svg.appendChild(defs);
@@ -1111,7 +1116,7 @@ function drawEdges(dagDiv, edges) {
     var d = 'M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + midY + ', ' + x2 + ' ' + midY + ', ' + x2 + ' ' + y2;
     path.setAttribute('d', d);
     path.setAttribute('fill', 'none');
-    path.setAttribute('stroke', '#4a5568');
+    path.setAttribute('stroke', '#3f3f46');
     path.setAttribute('stroke-width', '2');
     path.setAttribute('marker-end', 'url(#arrowhead)');
     path.setAttribute('data-from', e.from);
@@ -1130,7 +1135,7 @@ function highlightEdges(dagDiv, nodeId, on) {
     var from = path.getAttribute('data-from');
     var to = path.getAttribute('data-to');
     if (from === nodeId || to === nodeId) {
-      path.setAttribute('stroke', on ? '#00d2d3' : '#4a5568');
+      path.setAttribute('stroke', on ? '#e4e4e7' : '#3f3f46');
       path.setAttribute('stroke-width', on ? '3' : '2');
     }
   });
