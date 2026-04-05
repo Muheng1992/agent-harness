@@ -1,0 +1,10 @@
+{
+  "id": "apply-design-system",
+  "project": "prism-fix-v2",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "將修復後的 Design System 統一套用到所有 View。確保整個 App 視覺風格一致。\n\n## 操作\n\n逐一讀取 Prism/Presentation/ 下的所有 View 檔案，確保：\n\n1. **背景色**：每個獨立頁面都有 `PrismColors.background.ignoresSafeArea()` 或 `.prismScreen()`\n2. **文字色**：主要文字用 `.foregroundStyle(PrismColors.textPrimary)`，次要用 `textSecondary`\n3. **工具列背景**：頂部工具列用半透明材質 `.background(.ultraThinMaterial.opacity(0.5))`\n4. **底部安全區**：所有底部固定元素用 `.ignoresSafeArea(edges: .bottom)`\n5. **按鈕樣式**：用 PrismButtonStyles\n6. **字體**：用 PrismTypography 常數\n7. **分隔線**：用 `PrismColors.surfaceElevated` 而非預設 Divider\n8. **圓角**：統一 8pt（圖片）、12pt（卡片）、20pt（按鈕）\n9. **間距**：頁面邊距 16pt，元件間距 8-12pt\n10. **動畫**：狀態切換用 `.animation(.easeInOut(duration: 0.2))`\n\n## 需要檢查的檔案清單\n\n- CameraView.swift — 確認頂底工具列用 gradient/material\n- FilterBrowserView.swift — 確認背景色\n- PhotoEditorView.swift — 確認三層佈局背景\n- CropView.swift — 確認背景色\n- GalleryView.swift — 確認 NavigationBar 顏色\n- PhotoDetailView.swift — 確認全黑背景\n- VideoEditorView.swift — 確認背景色\n- SettingsView.swift — 確認 List 樣式\n- ExportView.swift — 確認按鈕樣式\n- VideoRecordingView.swift — 如果存在\n\n## 重要\n\n- 讀取每個檔案的完整內容後才修改\n- 不要改功能邏輯，只改視覺\n- 如果某個 View 已經正確了就不動\n- 每改一個檔案，確認 xcodebuild build 還是成功\n- 最終所有改動完成後 build 一次確認",
+  "touches": ["Prism/Presentation/Camera/CameraView.swift", "Prism/Presentation/Filters/FilterBrowserView.swift", "Prism/Presentation/Editor/PhotoEditorView.swift", "Prism/Presentation/Editor/CropView.swift", "Prism/Presentation/Gallery/GalleryView.swift", "Prism/Presentation/Gallery/PhotoDetailView.swift", "Prism/Presentation/Video/VideoEditorView.swift"],
+  "verify": "xcodebuild -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && echo 'PASS'",
+  "depends_on": ["fix-camera-fullscreen", "fix-editor-layout", "fix-filter-browser-layout", "fix-gallery-and-detail", "fix-crop-and-video", "fix-design-system", "fix-contentview-nav"],
+  "max_attempts": 5
+}

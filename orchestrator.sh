@@ -135,15 +135,34 @@ else
 
     HEAL_ACTION=$(echo "$HEAL_JSON" | jq -r '.action // empty' 2>/dev/null) || HEAL_ACTION=""
 
+    # 記錄 healer 決策到 audit log
+    if [ -n "$HEAL_ACTION" ]; then
+      python3 memory.py audit "$TASK_ID" \
+        --event-type healer_decision \
+        --event-data "$HEAL_JSON" \
+        --actor healer 2>/dev/null || true
+    fi
+
     if [ "$HEAL_ACTION" = "retry_with_role_switch" ]; then
+      OLD_ROLE=$(echo "$TASK_JSON" | jq -r '.role // "unknown"' 2>/dev/null) || OLD_ROLE="unknown"
       NEW_ROLE=$(echo "$HEAL_JSON" | jq -r '.new_role // "debugger"')
       sqlite3 "$DB_PATH" "UPDATE tasks SET role='${NEW_ROLE}', updated_at=datetime('now') WHERE id='${TASK_ID}';"
       echo "[orchestrator] 角色切換: $TASK_ID -> $NEW_ROLE" >&2
+      # 記錄角色切換到 audit log
+      python3 memory.py audit "$TASK_ID" \
+        --event-type role_switch \
+        --event-data "{\"from\":\"$OLD_ROLE\",\"to\":\"$NEW_ROLE\",\"reason\":\"looping\",\"attempt\":$ATTEMPT}" \
+        --actor orchestrator 2>/dev/null || true
     elif [ "$HEAL_ACTION" = "spawn_research" ]; then
       python3 task_picker.py spawn-subtasks --parent "$TASK_ID" \
         --subtasks "[{\"id\":\"${TASK_ID}-research\",\"goal\":\"研究 ${TASK_ID} 反覆失敗的根因。閱讀相關程式碼和錯誤訊息，分析錯誤模式並提出具體解決方案。\",\"role\":\"researcher\",\"max_attempts\":2}]" \
         2>&1 >&2 || true
       echo "[orchestrator] 已生成研究子任務 ${TASK_ID}-research" >&2
+      # 記錄 spawn 到 audit log
+      python3 memory.py audit "$TASK_ID" \
+        --event-type spawn_research \
+        --event-data "{\"spawned\":\"${TASK_ID}-research\",\"reason\":\"looping\",\"attempt\":$ATTEMPT}" \
+        --actor orchestrator 2>/dev/null || true
     fi
   fi
 fi

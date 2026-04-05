@@ -222,6 +222,20 @@ def check_looping_tasks(conn: sqlite3.Connection) -> list:
             f"已減少剩餘嘗試 ({task['attempt_count']}/{task['max_attempts']})"
         )
 
+        # 寫入 audit log
+        try:
+            conn.execute(
+                """INSERT INTO audit_log (task_id, event_type, event_data, actor)
+                   VALUES (?, 'looping_detected', ?, 'watchdog')""",
+                (task["id"], json.dumps({
+                    "fingerprint": runs[0]["output_fingerprint"],
+                    "attempt_count": task["attempt_count"],
+                    "max_attempts": task["max_attempts"],
+                })),
+            )
+        except sqlite3.OperationalError:
+            pass  # audit_log 表不存在
+
     if issues:
         conn.commit()
     return issues

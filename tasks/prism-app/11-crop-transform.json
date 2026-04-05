@@ -1,0 +1,10 @@
+{
+  "id": "crop-transform",
+  "project": "prism-app",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "建立裁切和變形工具——VSCO 的裁切/旋轉/矯正/透視校正。\n\n## 檔案\n\n### Prism/Presentation/Editor/CropViewModel.swift\n\n```swift\n@Observable\nclass CropViewModel {\n    var imageData: Data\n    var cropRect: CropRect = CropRect(x: 0, y: 0, width: 1, height: 1)\n    var rotation: Double = 0           // -45 ~ 45 度\n    var perspectiveX: Double = 0       // -1 ~ 1\n    var perspectiveY: Double = 0       // -1 ~ 1\n    var selectedAspectRatio: AspectRatio = .free\n    var isFlippedH = false\n    var isFlippedV = false\n    \n    enum AspectRatio: CaseIterable {\n        case free, square, r4x3, r3x4, r16x9, r9x16, r3x2, r2x3\n        var ratio: Double? { ... }\n        var label: String { ... }\n    }\n    \n    func applyCrop() async -> Data? { ... }\n    func resetCrop() { ... }\n}\n```\n\n### Prism/Presentation/Editor/CropView.swift\n\nVSCO 風格裁切介面：\n\n1. **中央**：照片預覽 + 裁切框\n   - 裁切框四角有拖動手柄\n   - 框外區域半透明黑色遮罩\n   - 裁切框內有三等分格線（九宮格）\n\n2. **底部工具列**：\n   - 矯正 slider（-45° ~ +45°）\n   - 比例選擇（Free, 1:1, 4:3, 16:9 等）\n   - 翻轉按鈕（水平/垂直）\n   - 旋轉 90° 按鈕\n\n3. **透視校正**：\n   - 水平透視 slider\n   - 垂直透視 slider\n\n### Prism/Presentation/Editor/CropOverlayView.swift\n\n裁切遮罩和手柄的 View。\n\n### 手勢\n\n- 雙指縮放調整裁切框大小\n- 拖動調整裁切框位置\n- 拖動四角手柄調整大小\n- 雙指旋轉手勢旋轉\n\n## UI 設計\n\n- 暗色背景\n- 裁切框：白色邊框 1pt\n- 格線：白色 0.5pt，50% opacity\n- 手柄：四角白色 L 型\n- 遮罩：黑色 50% opacity\n- 比例按鈕：capsule 樣式\n\n重要：\n- 先讀取 CropRect entity 和 ImageProcessingService 的 applyCrop\n- 所有變形操作要即時預覽（用 CIAffineTransform）\n- 專案必須 build 成功",
+  "touches": ["Prism/Presentation/Editor/CropViewModel.swift", "Prism/Presentation/Editor/CropView.swift", "Prism/Presentation/Editor/CropOverlayView.swift"],
+  "verify": "xcodebuild -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && echo 'PASS'",
+  "depends_on": ["image-engine", "domain-layer"],
+  "max_attempts": 5
+}

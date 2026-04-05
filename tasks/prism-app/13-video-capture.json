@@ -1,0 +1,10 @@
+{
+  "id": "video-capture",
+  "project": "prism-app",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "建立影片錄製功能——即時濾鏡錄影。\n\n## 檔案\n\n### Prism/Data/Services/VideoRecordingService.swift\n\n使用 AVFoundation 錄影，支援即時濾鏡：\n\n```swift\nfinal class VideoRecordingService: @unchecked Sendable {\n    private let captureSession: AVCaptureSession\n    private var movieOutput: AVCaptureMovieFileOutput?\n    private var assetWriter: AVAssetWriter?\n    private var videoInput: AVAssetWriterInput?\n    private var audioInput: AVAssetWriterInput?\n    private var pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?\n    \n    var isRecording = false\n    var recordingDuration: TimeInterval = 0\n    \n    // 使用 AssetWriter 而非 MovieFileOutput，這樣可以在寫入前套用濾鏡\n    func startRecording(with filter: FilterPreset?, outputURL: URL) { ... }\n    func stopRecording() async -> URL? { ... }\n    \n    // 每幀套用濾鏡後寫入\n    func processVideoFrame(_ sampleBuffer: CMSampleBuffer, filter: FilterPreset?) { ... }\n}\n```\n\n### Prism/Presentation/Camera/VideoRecordingView.swift\n\n在相機介面中加入影片模式切換：\n\n1. **模式切換**：相機底部加入 Photo / Video 切換（水平滑動）\n2. **錄影按鈕**：紅色圓形，按下開始錄影，再按停止\n3. **錄影指示器**：頂部紅色圓點 + 計時器\n4. **即時濾鏡**：錄影時也能套用濾鏡（從底部濾鏡列選擇）\n\n### 修改 CameraView.swift\n\n在 CameraView 中整合 Video 模式：\n- 底部加入 Photo/Video 切換\n- Video 模式下拍照按鈕變成錄影按鈕\n- 顯示錄影時長\n\n重要：\n- 先讀取 CameraService 和 CameraView\n- 影片存到暫存目錄，錄完後提示儲存\n- 模擬器上錄影不可用，要有 fallback\n- 專案必須 build 成功",
+  "touches": ["Prism/Data/Services/VideoRecordingService.swift", "Prism/Presentation/Camera/VideoRecordingView.swift", "Prism/Presentation/Camera/CameraView.swift"],
+  "verify": "xcodebuild -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && echo 'PASS'",
+  "depends_on": ["camera-engine", "filter-presets-classic"],
+  "max_attempts": 5
+}

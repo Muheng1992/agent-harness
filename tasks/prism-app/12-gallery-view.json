@@ -1,0 +1,10 @@
+{
+  "id": "gallery-view",
+  "project": "prism-app",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "建立照片庫介面——瀏覽、匯入、管理照片。\n\n## 檔案\n\n### Prism/Presentation/Gallery/GalleryViewModel.swift\n\n```swift\n@Observable\nclass GalleryViewModel {\n    var photos: [Photo] = []\n    var selectedPhoto: Photo?\n    var isLoading = false\n    var showPhotoPicker = false\n    var showCamera = false\n    var importedImageData: Data?\n    \n    func loadPhotos() async { ... }\n    func importPhoto(_ data: Data) { ... }\n    func deletePhoto(_ photo: Photo) { ... }\n}\n```\n\n### Prism/Presentation/Gallery/GalleryView.swift\n\nVSCO 風格的照片庫：\n\n1. **Grid 瀏覽**：\n   - 3 欄方形網格\n   - LazyVGrid + ScrollView\n   - 縮圖載入（使用 AsyncImage 風格）\n   - 點擊進入編輯流程\n\n2. **頂部工具列**：\n   - 匯入按鈕（開啟 PHPicker）\n   - 相機按鈕（跳轉到相機）\n\n3. **空狀態**：\n   - 當沒有照片時顯示「匯入照片開始編輯」\n\n### Prism/Presentation/Gallery/PhotoDetailView.swift\n\n全螢幕照片預覽：\n- 照片全螢幕顯示\n- 底部操作列：編輯（進入 Editor）、濾鏡（進入 FilterBrowser）、裁切、刪除\n- 左右滑動切換照片\n- 雙指縮放\n\n### Prism/Presentation/Gallery/PhotoGridItemView.swift\n\n網格中單個照片 cell。\n\n### 編輯流程整合\n\n從 Gallery → PhotoDetail → 選擇操作 → FilterBrowser / PhotoEditor / CropView → 回到 PhotoDetail。\n\n使用 NavigationStack + NavigationPath 管理導航。\n\n## 更新 ContentView\n\n將 Gallery tab 接上 GalleryView。主 TabView 結構：\n- Tab 1: Camera (camera.fill)\n- Tab 2: Gallery (photo.on.rectangle)\n- Tab 3: Settings (gearshape)\n\n重要：\n- 先讀取 PhotoLibraryService 和 PhotoPickerView\n- 整合已建立的 FilterBrowserView、PhotoEditorView、CropView\n- 專案必須 build 成功",
+  "touches": ["Prism/Presentation/Gallery/GalleryViewModel.swift", "Prism/Presentation/Gallery/GalleryView.swift", "Prism/Presentation/Gallery/PhotoDetailView.swift", "Prism/Presentation/Gallery/PhotoGridItemView.swift", "Prism/ContentView.swift"],
+  "verify": "xcodebuild -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && echo 'PASS'",
+  "depends_on": ["photo-library", "domain-layer"],
+  "max_attempts": 5
+}

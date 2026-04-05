@@ -1,0 +1,10 @@
+{
+  "id": "simulator-screenshot-verify",
+  "project": "prism-fix-v3",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "在模擬器上實際啟動 App，截圖驗證每個畫面的佈局是否正確。如果發現問題就直接修復。\n\n## 步驟\n\n### 1. 啟動模擬器並安裝 App\n\n```bash\n# Boot 模擬器\nxcrun simctl boot 'iPhone 17 Pro' 2>/dev/null || true\n\n# Build for simulator\nxcodebuild build -project Prism.xcodeproj -scheme Prism \\\n  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \\\n  -derivedDataPath /tmp/PrismBuild 2>&1 | tail -5\n\n# 找到 .app 路徑\nAPP_PATH=$(find /tmp/PrismBuild -name 'Prism.app' -type d | head -1)\n\n# 安裝到模擬器\nxcrun simctl install booted \"$APP_PATH\"\n\n# 啟動 App\nxcrun simctl launch booted com.muheng.Prism\n\n# 等待 App 啟動\nsleep 3\n```\n\n### 2. 截圖每個畫面\n\n```bash\nmkdir -p /tmp/prism-screenshots\n\n# 截圖 1: 相機 Tab（預設畫面）\nxcrun simctl io booted screenshot /tmp/prism-screenshots/01-camera.png\n\n# 切換到 Gallery Tab（用 xcrun simctl 的 UI 自動化或直接看截圖）\nsleep 1\nxcrun simctl io booted screenshot /tmp/prism-screenshots/02-gallery.png\n```\n\n### 3. 分析截圖\n\n用 `sips` 或 `file` 確認截圖尺寸是否是全螢幕（iPhone 17 Pro 解析度）：\n```bash\nsips -g pixelWidth -g pixelHeight /tmp/prism-screenshots/01-camera.png\n```\n\n### 4. 視覺檢查清單\n\n用 Read 工具讀取截圖圖片，分析：\n\n- [ ] 相機預覽（或模擬器 placeholder）是否佔滿整個螢幕？\n- [ ] 沒有黑色邊距或 4:3 框？\n- [ ] 底部控制列是否在正確位置？\n- [ ] TabBar 是否正確顯示三個 tab？\n- [ ] 文字是否可讀（白色 on 黑色）？\n\n### 5. 如果發現問題就修復\n\n常見問題和修復：\n- 如果 App 沒有全螢幕 → 檢查 ContentView 是否缺少 `.ignoresSafeArea()`\n- 如果內容擠在一個框裡 → 移除 GeometryReader 中的固定 frame，改用 maxWidth/maxHeight\n- 如果有白色邊框 → 確認所有背景色都正確設置\n- 如果 TabBar 不是深色 → 確認 UITabBarAppearance 設置\n\n### 6. 修復後重新 build + 截圖確認\n\n重複步驟 1-4 直到截圖看起來正確。\n\n## 驗證\n\n截圖文件必須存在，App 必須能正常啟動。",
+  "touches": [],
+  "verify": "test -f /tmp/prism-screenshots/01-camera.png && xcodebuild -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && echo 'PASS'",
+  "depends_on": ["nuke-and-rebuild-camera", "nuke-and-rebuild-editor", "nuke-and-rebuild-gallery", "fix-video-and-export"],
+  "max_attempts": 8
+}

@@ -1,0 +1,10 @@
+{
+  "id": "export-share",
+  "project": "prism-app",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "建立匯出和分享功能。\n\n## 檔案\n\n### Prism/Data/Services/ExportService.swift\n\n```swift\nfinal class ExportService: @unchecked Sendable {\n    enum ExportFormat { case jpeg, png, heic }\n    enum ExportQuality: Double { case high = 1.0, medium = 0.8, low = 0.5 }\n    \n    // 匯出照片到 Data\n    func exportPhoto(imageData: Data, format: ExportFormat, quality: ExportQuality) -> Data? { ... }\n    \n    // 儲存到相簿\n    func saveToPhotoLibrary(imageData: Data) async throws { ... }\n    \n    // 儲存影片到相簿\n    func saveVideoToPhotoLibrary(url: URL) async throws { ... }\n}\n```\n\n### Prism/Presentation/Export/ExportView.swift\n\n匯出選項介面：\n- 格式選擇（JPEG / PNG / HEIC）\n- 品質選擇（高/中/低 + 預估檔案大小）\n- 儲存到相簿按鈕\n- 分享按鈕（開啟 UIActivityViewController）\n\n### Prism/Presentation/Export/ShareSheet.swift\n\nUIActivityViewController 的 SwiftUI wrapper。\n\n### Prism/Presentation/Settings/SettingsView.swift\n\n設定頁面：\n- 預設匯出格式\n- 預設匯出品質\n- 關於 App\n- 版本資訊\n\n### 整合\n\n在 PhotoDetailView 和 VideoEditorView 中加入匯出/分享按鈕。\n更新 ContentView 的 Settings tab。\n\n重要：\n- 先讀取 PhotoLibraryService\n- UIActivityViewController 要用 UIViewControllerRepresentable 包裝\n- 專案必須 build 成功",
+  "touches": ["Prism/Data/Services/ExportService.swift", "Prism/Presentation/Export/ExportView.swift", "Prism/Presentation/Export/ShareSheet.swift", "Prism/Presentation/Settings/SettingsView.swift"],
+  "verify": "xcodebuild -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && echo 'PASS'",
+  "depends_on": ["photo-editor", "gallery-view"],
+  "max_attempts": 5
+}

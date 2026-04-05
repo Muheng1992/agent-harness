@@ -1,0 +1,10 @@
+{
+  "id": "levels-and-geometry",
+  "project": "prism-editor-v2",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "實作色階（Levels）和幾何校正（Geometry）工具。\n\n## 1. 色階（Levels）\n\nLightroom 沒有獨立的 Levels 工具，但 Snapseed 有。用 Blacks/Whites + Midpoint gamma 可以模擬。\n\n在 AdjustmentParams 新增：\n```swift\nvar levelsBlackInput: Double = 0     // 0 ~ 1（輸入黑點）\nvar levelsWhiteInput: Double = 1     // 0 ~ 1（輸入白點）\nvar levelsMidpoint: Double = 1       // 0.1 ~ 10（gamma / midpoint）\nvar levelsBlackOutput: Double = 0    // 0 ~ 1（輸出黑點）\nvar levelsWhiteOutput: Double = 1    // 0 ~ 1（輸出白點）\n```\n\n用 `CIColorMatrix` 或 `CIToneCurve` 實作 levels mapping。\n\nUI：LevelsView.swift — 顯示直方圖 + 三個可拖動的三角形（黑點、灰點、白點）。\n\n## 2. 幾何校正（Geometry / Lens Correction）\n\n在 AdjustmentParams 新增：\n```swift\nvar geometryDistortion: Double = 0    // -1 ~ 1（桶狀/枕狀畸變校正）\nvar geometryVertical: Double = 0      // -1 ~ 1（垂直透視）\nvar geometryHorizontal: Double = 0    // -1 ~ 1（水平透視）\nvar geometryRotation: Double = 0      // -45 ~ 45（旋轉角度）\nvar chromaticAberration: Double = 0   // 0 ~ 1（色差校正強度）\n```\n\n實作：\n- 畸變校正：`CIBumpDistortion` 或自訂 warp kernel\n- 透視校正：`CIPerspectiveCorrection` + `CIAffineTransform`\n- 色差校正：分別位移 R/B 通道再合成（用 `CIColorMatrix` 位移）\n\n## 整合\n\n在 EditTool enum 加入 `.levels`, `.geometry`。\n\n重要：\n- 先讀取所有現有檔案\n- 新檔案記得加入 Xcode target\n- 專案必須 build 成功",
+  "touches": ["Prism/Domain/Entities/AdjustmentParams.swift", "Prism/Data/Services/ImageProcessingService.swift", "Prism/Presentation/Editor/LevelsView.swift", "Prism/Presentation/Editor/PhotoEditorViewModel.swift"],
+  "verify": "xcodebuild -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && grep -q 'levels\\|geometry\\|chromaticAberration' Prism/Domain/Entities/AdjustmentParams.swift && echo 'PASS'",
+  "depends_on": [],
+  "max_attempts": 8
+}

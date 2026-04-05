@@ -1,0 +1,10 @@
+{
+  "id": "filter-presets-modern",
+  "project": "prism-app",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "在 FilterPresetProvider 中新增 15 個現代/藝術風格濾鏡預設。\n\n## 新增到 FilterPresetProvider.swift\n\n### 現代風格預設\n\n1. **M1 - Clean Portrait** — 乾淨明亮人像，微暖\n2. **M2 - Moody** — 低飽和、暗色調、電影感\n3. **M3 - Golden Hour** — 金色暖調，模擬日落\n4. **M4 - Pastel** — 粉彩系，低對比高亮度\n5. **M5 - Teal & Orange** — 好萊塢電影色調\n6. **M6 - Neon Night** — 高飽和、高對比、夜景\n7. **M7 - Faded Memory** — 重度褪色、復古\n8. **M8 - Bright & Airy** — 高曝光、低對比、婚紗風\n9. **M9 - Dark Cinematic** — 暗色電影風、冷色調\n10. **M10 - Vibrant** — 極高飽和、鮮豔\n\n### 人像專用\n11. **P1 - Soft Skin** — 膚色最佳化、柔焦\n12. **P2 - Studio** — 中性色溫、精確膚色\n\n### 風景專用\n13. **L1 - Blue Hour** — 藍調風景\n14. **L2 - Autumn** — 暖色秋季風格\n15. **L3 - Dramatic Sky** — 高對比、強調天空\n\n每個預設要有精確的 FilterParameters 數值。新增 `static let modern: [FilterPreset]` 和更新 `all` 屬性。\n\ncategory 分別用 .modern, .portrait, .landscape, .cinematic。\n\n先讀取現有的 FilterPresetProvider.swift 再修改。專案必須 build 成功。",
+  "touches": ["Prism/Data/Services/FilterPresetProvider.swift"],
+  "verify": "xcodebuild -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && grep -c 'FilterPreset(' Prism/Data/Services/FilterPresetProvider.swift | xargs test 25 -le && echo 'PASS'",
+  "depends_on": ["filter-presets-classic"],
+  "max_attempts": 5
+}

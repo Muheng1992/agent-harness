@@ -1,0 +1,10 @@
+{
+  "id": "fix-video-and-export",
+  "project": "prism-fix-v3",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "修復影片編輯器和匯出頁面的佈局。\n\n## 先讀取 docs/design-spec.md\n\n## VideoEditorView.swift\n\n影片預覽要填滿上方空間（跟 PhotoEditor 同樣邏輯）：\n- 影片播放器填滿 `maxWidth: .infinity, maxHeight: .infinity`\n- 不能有 cornerRadius 8 + padding 16 造成的縮小效果！\n- 影片要 edge-to-edge 顯示\n- 底部是 Timeline + 控制列，固定高度\n\n```swift\nvar body: some View {\n    VStack(spacing: 0) {\n        topBar\n        \n        // 影片預覽（填滿剩餘空間）\n        ZStack {\n            Color.black\n            VideoPlayerView(player: viewModel.player)\n                .frame(maxWidth: .infinity, maxHeight: .infinity)\n        }\n        .frame(maxWidth: .infinity, maxHeight: .infinity)\n        .clipped()\n        \n        // Timeline\n        VideoTimelineView(...)\n            .frame(height: 60)\n            .padding(.horizontal, 16)\n        \n        // 控制區\n        controlArea\n            .frame(height: 80)\n        \n        // 模式選擇\n        modeSelector\n            .frame(height: 44)\n    }\n    .background(PrismColors.background)\n    .ignoresSafeArea(edges: .bottom)\n}\n```\n\n## ExportView.swift\n\n匯出頁面也要好看：\n- 圖片預覽佔上方 50%，黑色背景，圖片居中\n- 選項用 List style，dark mode\n- 按鈕用 full-width style\n\n## SettingsView.swift\n\n- 確保 List 背景是 PrismColors.background\n- Section 標題是灰色\n- Toggle/Picker 的 tint 是白色\n\n讀取所有現有檔案再修改。專案必須 build 成功。",
+  "touches": ["Prism/Presentation/Video/VideoEditorView.swift", "Prism/Presentation/Export/ExportView.swift", "Prism/Presentation/Settings/SettingsView.swift", "Prism/Presentation/Video/VideoPlayerView.swift"],
+  "verify": "xcodebuild -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && echo 'PASS'",
+  "depends_on": ["research-apple-hig"],
+  "max_attempts": 5
+}

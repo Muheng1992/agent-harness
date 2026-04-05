@@ -1,0 +1,10 @@
+{
+  "id": "research-apple-hig",
+  "project": "prism-fix-v3",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "上網搜尋 Apple Human Interface Guidelines 和專業相機 App 的 UI 最佳實踐，產出一份設計規範文件給後續任務參考。\n\n## 搜尋項目\n\n1. 用 WebSearch 搜尋 'Apple Human Interface Guidelines iOS camera app layout'\n2. 用 WebSearch 搜尋 'SwiftUI full screen camera preview best practice 2024'\n3. 用 WebSearch 搜尋 'VSCO app UI layout analysis photo editor'\n4. 用 WebSearch 搜尋 'iOS photo editing app SwiftUI layout edge to edge'\n5. 用 WebSearch 搜尋 'Apple HIG color and typography dark mode photography app'\n6. 用 WebFetch 讀取 https://developer.apple.com/design/human-interface-guidelines/layout 的內容\n\n## 產出\n\n寫一份 `docs/design-spec.md` 包含：\n\n### 1. 全螢幕佈局規範\n- 相機 App 必須佔滿整個螢幕（edge-to-edge），沒有任何邊距\n- 控制元件疊加在預覽上方，用半透明背景\n- 不要用 GeometryReader 把內容塞進固定比例的框\n- 所有全螢幕 View 必須用 `.ignoresSafeArea(.all)` 而非只 `.bottom`\n\n### 2. Apple HIG 關鍵原則\n- 內容優先：照片/影片預覽要盡量大\n- 邊緣到邊緣：利用整個螢幕，包括圓角和動態島\n- 半透明控制：頂部/底部工具列用 `.ultraThinMaterial`\n- 適應性佈局：不要硬編碼尺寸，用 `maxWidth: .infinity`\n\n### 3. 照片編輯器佈局黃金比例\n- 預覽區：佔螢幕 65%+（不是放在一個 4:3 框裡！要填滿寬度）\n- 工具列：底部固定，高度 ~80pt\n- Slider：預覽和工具列之間，高度 ~50pt\n\n### 4. Gallery 佈局\n- 正方形網格，0~2pt 間距\n- 每張圖用 `.fill` + `.clipped()` 填滿 cell（不是 .fit！）\n- NavigationBar 跟著滾動隱藏\n\n### 5. 色彩規範\n- 純黑背景 #000000（相機/編輯器）\n- 近黑背景 #0D0D0D（Gallery/Settings）\n- 半透明工具列用 `.ultraThinMaterial`\n- 文字白色，次要灰色 #8E8E93\n\n這份文件是後續所有修復任務的依據。",
+  "touches": ["docs/design-spec.md"],
+  "verify": "test -f docs/design-spec.md && wc -l docs/design-spec.md | awk '{print $1}' | xargs test 50 -le && echo 'PASS'",
+  "depends_on": [],
+  "max_attempts": 5
+}

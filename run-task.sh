@@ -35,6 +35,7 @@ PROJECT_DIR=$(echo "$TASK_JSON" | jq -r '.project_dir // empty')
 ATTEMPT=$(echo "$TASK_JSON" | jq -r '.attempt_count')
 MAX_ATTEMPTS=$(echo "$TASK_JSON" | jq -r '.max_attempts')
 ROLE=$(echo "$TASK_JSON" | jq -r '.role // "implementer"')
+TOUCHES=$(echo "$TASK_JSON" | jq -r '.touches // [] | .[]' 2>/dev/null | sed 's/^/  - /' || true)
 
 # ── 1b. Read role definition ──────────────────────────────
 ROLE_FILE="${SCRIPT_DIR}/roles/${ROLE}.md"
@@ -96,10 +97,13 @@ PROMPT="${ROLE_PROMPT:+${ROLE_PROMPT}
 }You are an autonomous coding agent working on project '${PROJECT}'.
 
 TASK: ${GOAL}
-
+${TOUCHES:+
+SCOPE — files you should focus on (do not modify files outside this list unless necessary):
+${TOUCHES}
+}
 ${PROJECT_BRIEF:+PROJECT BRIEF (shared context from all completed tasks in this project — key interfaces and decisions):
 ${PROJECT_BRIEF}
-}${UPSTREAM_CONTEXT:+UPSTREAM TASKS OUTPUT (what your direct dependencies actually created — READ these files before coding):
+}${UPSTREAM_CONTEXT:+UPSTREAM TASKS (decisions are shown inline; source code must be Read):
 ${UPSTREAM_CONTEXT}
 }${SPAWN_CONTEXT:+PARENT TASK CONTEXT (detailed analysis from the task that spawned you):
 ${SPAWN_CONTEXT}
@@ -110,7 +114,7 @@ ${MEMORY_CONTEXT}
 INSTRUCTIONS:
 - Complete the task fully and correctly.
 - Work in the current directory.
-- IMPORTANT: Before writing code, READ the files listed in UPSTREAM TASKS OUTPUT and PROJECT BRIEF to understand actual interfaces, naming, and structure. Do NOT assume — verify by reading.
+- CRITICAL: The "關鍵決策" and "祖先決策" shown above are design decisions you must follow — they are NOT in the source code. Before writing ANY code, use the Read tool to read EVERY source code file and handoff manifest listed in UPSTREAM TASKS. Do NOT assume interfaces, naming, or structure — verify by reading the actual files.
 - Do not ask questions; make reasonable decisions.
 
 SUB-TASK SPAWNING:
@@ -162,7 +166,11 @@ else
   WORK_DIR="$(pwd)"
 fi
 
-# ── 7. Execute Claude ───────────────────────────────────
+# ── 7. Save prompt for traceability ────────────────────
+PROMPT_FILE="/tmp/prompt-${TASK_ID}.txt"
+printf '%s' "$PROMPT" > "$PROMPT_FILE"
+
+# ── 8. Execute Claude ───────────────────────────────────
 START_TIME=$(date +%s)
 CLAUDE_EXIT=0
 
@@ -179,15 +187,16 @@ DURATION=$((END_TIME - START_TIME))
 
 echo "[run-task] Claude finished in ${DURATION}s (exit=$CLAUDE_EXIT)" >&2
 
-# ── 8. Write result to memory ───────────────────────────
+# ── 9. Write result to memory（含完整 prompt）──────────
 python3 memory.py write "$TASK_ID" \
   --output-file "$OUTPUT_FILE" \
+  --prompt-file "$PROMPT_FILE" \
   --worker-id "$WORKER_ID" \
   --attempt "$((ATTEMPT + 1))" \
   --duration "$DURATION" \
   --status "running" 2>/dev/null || true
 
-# ── 9. Handle Claude failure ────────────────────────────
+# ── 10. Handle Claude failure ───────────────────────────
 if [ "$CLAUDE_EXIT" -ne 0 ]; then
   echo "[run-task] ERROR: Claude execution failed for task $TASK_ID" >&2
   FAILURE_TEXT="Claude exited with code $CLAUDE_EXIT"
@@ -198,11 +207,11 @@ if [ "$CLAUDE_EXIT" -ne 0 ]; then
   exit 1
 fi
 
-# ── 10. Extract and save handoff manifest ─────────────
+# ── 11. Extract and save handoff manifest ─────────────
 # 從 Claude output 中提取結構化 handoff manifest 供下游任務使用
 python3 memory.py extract-handoff "$TASK_ID" "$OUTPUT_FILE" 2>/dev/null || true
 
-# ── 11. Update project brief ──────────────────────────
+# ── 12. Update project brief ──────────────────────────
 # 把這個任務的介面和決策追加到 project brief（並行任務共享）
 python3 memory.py update-brief "$TASK_ID" 2>/dev/null || true
 

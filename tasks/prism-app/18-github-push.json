@@ -1,0 +1,10 @@
+{
+  "id": "github-push",
+  "project": "prism-app",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "將 Prism 專案推到 GitHub private repo。\n\n## 步驟\n\n1. **初始化 git（如果還沒有）**\n   ```bash\n   git init\n   ```\n\n2. **建立 .gitignore**\n   ```\n   # Xcode\n   build/\n   DerivedData/\n   *.xcuserdata\n   *.xcworkspace/xcuserdata/\n   *.pbxuser\n   *.mode1v3\n   *.mode2v3\n   *.perspectivev3\n   *.moved-aside\n   xcuserdata/\n   \n   # Swift Package Manager\n   .build/\n   Packages/\n   Package.pins\n   Package.resolved\n   \n   # macOS\n   .DS_Store\n   *.swp\n   *~\n   \n   # CocoaPods\n   Pods/\n   ```\n\n3. **初始 commit**\n   ```bash\n   git add -A\n   git commit -m 'feat: Prism — VSCO 級濾鏡相機 iOS App\n   \n   功能：\n   - 30+ 電影膠片模擬濾鏡\n   - 完整相機（手動曝光/ISO/白平衡/對焦）\n   - 照片編輯（17 種調整工具）\n   - 裁切/旋轉/透視校正\n   - 影片錄製和編輯\n   - VSCO 風格暗色 UI\n   \n   架構：Clean Architecture (Domain/Data/Presentation)\n   技術：SwiftUI + Core Image + AVFoundation + Metal'\n   ```\n\n4. **建立 GitHub private repo 並推送**\n   ```bash\n   gh repo create Prism --private --source=. --push\n   ```\n   如果 repo 已存在：\n   ```bash\n   git remote add origin https://github.com/Muheng1992/Prism.git\n   git push -u origin main\n   ```\n\n5. **確認**\n   ```bash\n   gh repo view Muheng1992/Prism --json isPrivate,url\n   ```\n\n重要：\n- 確認 .gitignore 在 commit 之前建立\n- repo 必須是 private\n- 不要 commit DerivedData 或 build 產物\n- 如果 git 已經有 commit 就不需要 init",
+  "touches": [".gitignore"],
+  "verify": "gh repo view Muheng1992/Prism --json isPrivate 2>&1 | grep -q 'true' && echo 'PASS'",
+  "depends_on": ["ui-polish", "unit-tests", "video-editor"],
+  "max_attempts": 5
+}

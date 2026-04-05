@@ -1,0 +1,10 @@
+{
+  "id": "build-and-test",
+  "project": "prism-fix-v2",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "最終完整建置和測試——確認整個 App 沒有任何 build error 或 warning，所有測試通過。\n\n## 操作步驟\n\n1. **完整 clean build**\n   ```bash\n   xcodebuild clean build -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' 2>&1\n   ```\n   確認 BUILD SUCCEEDED，0 errors。\n\n2. **跑所有測試**\n   ```bash\n   xcodebuild test -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' 2>&1\n   ```\n   確認 TEST SUCCEEDED。如果有測試失敗，修復它們。\n\n3. **檢查 build warnings**\n   如果有 warning，盡量修復（特別是 deprecation 和 unused variable）。\n\n4. **確認所有檔案都在 Xcode target 中**\n   讀取 project.pbxproj，確認所有 .swift 檔案都有被加入 compile sources。\n   如果有遺漏，手動加入 pbxproj。\n\n5. **確認 Info.plist 權限**\n   確認以下權限描述存在：\n   - NSCameraUsageDescription\n   - NSPhotoLibraryUsageDescription\n   - NSMicrophoneUsageDescription\n   - NSPhotoLibraryAddUsageDescription\n\n6. **修復任何問題**\n   如果 build 或 test 有問題，直接修復。可能的問題：\n   - 新建的 DesignSystem 檔案沒加入 target\n   - import 缺失\n   - 型別不匹配\n   - 已刪除的參考\n\n7. **Git commit 所有修改**\n   ```bash\n   git add -A\n   git commit -m 'fix: 全面修復 UI 佈局和設計系統\n   \n   - 相機預覽全螢幕（layerClass override）\n   - 編輯器三層佈局（60% 預覽 + slider + 工具列）\n   - 濾鏡瀏覽器響應式縮圖\n   - Gallery 正方形網格 + 全螢幕預覽\n   - 裁切和影片編輯器佈局修復\n   - Design System 強化（顏色/字體/按鈕/Modifier）\n   - 統一套用暗色主題到所有 View\n   - UI 測試'\n   ```\n\n8. **Push to GitHub**\n   ```bash\n   git push origin main\n   ```",
+  "touches": [],
+  "verify": "xcodebuild clean build -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && xcodebuild test -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' 2>&1 | tail -5 | grep -qE 'TEST SUCCEEDED|Executed.*test' && echo 'PASS'",
+  "depends_on": ["ui-tests"],
+  "max_attempts": 8
+}

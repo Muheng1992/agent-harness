@@ -1,0 +1,10 @@
+{
+  "id": "final-build-test-push",
+  "project": "prism-fix-v3",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "最終 clean build + test + push 到 GitHub。\n\n## 步驟\n\n1. Clean build\n```bash\nxcodebuild clean build -project Prism.xcodeproj -scheme Prism \\\n  -destination 'platform=iOS Simulator,name=iPhone 17 Pro'\n```\n\n2. 跑所有測試\n```bash\nxcodebuild test -project Prism.xcodeproj -scheme Prism \\\n  -destination 'platform=iOS Simulator,name=iPhone 17 Pro'\n```\n\n如果有測試失敗，修復它們。\n\n3. 確認沒有 build warning（盡量）\n\n4. Git commit + push\n```bash\ngit add -A\ngit commit -m 'fix: 全面重寫 UI 佈局——Apple HIG 標準\n\n- 相機預覽真正全螢幕（layerClass + ZStack overlay）\n- 照片編輯器用 maxHeight: .infinity 取代固定比例框\n- Gallery 用 .fill + .clipped 填滿 cell\n- PhotoDetail 全螢幕 + 可隱藏控制列\n- 影片編輯器 edge-to-edge\n- 所有 View 統一暗色主題\n- 參照 Apple HIG 設計規範'\ngit push origin main\n```\n\n5. 確認 GitHub 有最新 commit\n```bash\ngh repo view Muheng1992/Prism --json pushedAt\n```",
+  "touches": [],
+  "verify": "xcodebuild clean build -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && git log --oneline -1 | grep -qi 'fix\\|UI\\|layout' && echo 'PASS'",
+  "depends_on": ["simulator-screenshot-verify"],
+  "max_attempts": 8
+}

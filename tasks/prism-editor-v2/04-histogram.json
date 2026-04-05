@@ -1,0 +1,10 @@
+{
+  "id": "histogram",
+  "project": "prism-editor-v2",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "實作即時直方圖（Histogram）——專業修圖必備。\n\n## 功能\n\n在照片編輯器頂部顯示即時直方圖，隨著調整參數變化而更新。\n\n## HistogramView.swift\n\n```swift\nstruct HistogramView: View {\n    let imageData: Data?\n    @State private var rgbHistogram: ([CGFloat], [CGFloat], [CGFloat])?\n    \n    var body: some View {\n        Canvas { context, size in\n            guard let histogram = rgbHistogram else { return }\n            drawChannel(context: &context, size: size, data: histogram.0, color: .red.opacity(0.4))\n            drawChannel(context: &context, size: size, data: histogram.1, color: .green.opacity(0.4))\n            drawChannel(context: &context, size: size, data: histogram.2, color: .blue.opacity(0.4))\n        }\n        .frame(height: 60)\n        .background(Color.black.opacity(0.3))\n        .cornerRadius(6)\n    }\n}\n```\n\n## 計算方法\n\n使用 `vImage` 或手動掃描像素計算 256 bin 的 RGB 直方圖。\n\n用 `CIAreaHistogram` filter 更高效：\n```swift\nfunc calculateHistogram(from image: CIImage) -> [CGFloat] {\n    let filter = CIFilter(name: \"CIAreaHistogram\")!\n    filter.setValue(image, forKey: kCIInputImageKey)\n    filter.setValue(CIVector(cgRect: image.extent), forKey: \"inputExtent\")\n    filter.setValue(256, forKey: \"inputCount\")\n    filter.setValue(1.0, forKey: \"inputScale\")\n    // ... 讀取 output 像素\n}\n```\n\n## 整合\n\n在 PhotoEditorView 的圖片預覽上方，疊加一個小的 HistogramView。可以點擊展開/收起。\n\n在 ToneCurveView 的背景也顯示直方圖（半透明）。\n\n重要：\n- 先讀取現有 PhotoEditorView\n- 直方圖計算要在背景執行緒，避免卡 UI\n- 用 WebSearch 搜尋 'iOS CIAreaHistogram Swift implementation' 找最佳做法\n- 新檔案記得加入 Xcode target（修改 project.pbxproj）\n- 專案必須 build 成功",
+  "touches": ["Prism/Presentation/Editor/HistogramView.swift", "Prism/Presentation/Editor/PhotoEditorView.swift"],
+  "verify": "xcodebuild -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && test -f Prism/Presentation/Editor/HistogramView.swift && echo 'PASS'",
+  "depends_on": [],
+  "max_attempts": 8
+}

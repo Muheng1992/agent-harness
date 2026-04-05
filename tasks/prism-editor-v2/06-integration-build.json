@@ -1,0 +1,10 @@
+{
+  "id": "editor-integration-build",
+  "project": "prism-editor-v2",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "整合所有新的編輯工具，確保一起 build 成功、沒有衝突。\n\n## 操作\n\n1. 讀取所有被修改的檔案（AdjustmentParams、ImageProcessingService、PhotoEditorViewModel、PhotoEditorView）\n2. 確認所有新的 EditTool case 都有對應的：\n   - displayName（繁體中文）\n   - icon（SF Symbol）\n   - sliderValue 映射\n   - updateAdjustment 映射\n   - isAdjusted 判斷\n3. 確認所有新建的 View 檔案都在 Xcode target 中（grep project.pbxproj）\n4. 如果有檔案不在 target 中，用 ruby script 加入 pbxproj\n5. 確認工具列的排序合理：\n   - 光影：曝光、亮度、對比、高光、陰影、白色、黑色\n   - 色彩：飽和度、自然飽和度、色溫、色調、HSL、色彩分級\n   - 效果：清晰度、銳化、褪色、去霧、顆粒、暈影、光暈、暈染\n   - 細節：噪點消除\n   - 進階：曲線、色階、膚色\n   - 變形：幾何校正\n6. Clean build\n7. 跑所有測試\n8. Git commit + push\n\n```bash\nxcodebuild clean build -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro'\nxcodebuild test -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro'\ngit add -A && git commit -m 'feat: 專業級照片編輯工具（曲線/色階/色彩分級/去霧/直方圖等）' && git push\n```",
+  "touches": [],
+  "verify": "xcodebuild clean build -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && echo 'PASS'",
+  "depends_on": ["tone-curve-engine", "new-adjustment-tools", "color-grading", "histogram", "levels-and-geometry"],
+  "max_attempts": 8
+}

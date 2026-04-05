@@ -102,14 +102,38 @@ def read_context(task_id: str) -> str:
         conn.close()
 
 
-def read_upstream_context(task_id: str) -> str:
-    """讀取前置任務（depends_on）的 handoff manifest。
+def _get_handoff_dir(task_id: str) -> Path:
+    """取得 handoff manifest 的存放目錄。
 
-    設計原則（基於 MetaGPT / Anthropic / LangGraph best practices）：
-    - 不轉發原始 output（anti-pattern: Natural Language Telephone）
-    - 提供結構化 manifest：檔案路徑 + 介面摘要
-    - 告訴下游 agent「去讀哪些檔案」，而非把內容塞進 prompt
-    - 每個上游預算 ~500 字元，總計最多 3000 字元
+    優先存到 {project_dir}/.harness/handoffs/，
+    若無 project_dir 則 fallback 到 /tmp。
+    """
+    conn = get_connection()
+    try:
+        task = conn.execute(
+            "SELECT project_dir FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        if task and task["project_dir"]:
+            d = Path(task["project_dir"]) / ".harness" / "handoffs"
+            d.mkdir(parents=True, exist_ok=True)
+            return d
+        return Path("/tmp")
+    finally:
+        conn.close()
+
+
+def get_handoff_path(task_id: str) -> Path:
+    """取得特定 task 的 handoff manifest 完整路徑。"""
+    return _get_handoff_dir(task_id) / f"handoff-{task_id}.json"
+
+
+def read_upstream_context(task_id: str) -> str:
+    """產生上游任務的混合式上下文（Hybrid: Push decisions + Pull source code）。
+
+    設計原則（基於 Anthropic multi-agent + Google ADK best practices）：
+    - decisions / notes / ancestor_decisions → Push（直接注入 prompt，source code 裡讀不到）
+    - created_files / interfaces → Pull（只給路徑，agent 自己 Read）
+    - 兼顧「agent 立即有設計脈絡」與「source code 零損耗」
     """
     conn = get_connection()
     try:
@@ -123,15 +147,9 @@ def read_upstream_context(task_id: str) -> str:
         if not depends:
             return ""
 
-        TOTAL_LIMIT = 3000
         lines = []
-        total_chars = 0
 
         for dep_id in depends:
-            if total_chars >= TOTAL_LIMIT:
-                lines.append(f"\n(... 省略其餘上游任務，已達 context 上限)")
-                break
-
             dep_task = conn.execute(
                 "SELECT id, goal, touches, status, project_dir FROM tasks WHERE id = ?",
                 (dep_id,),
@@ -144,46 +162,42 @@ def read_upstream_context(task_id: str) -> str:
                 continue
 
             touches = json.loads(dep_task["touches"] or "[]")
+            goal_short = dep_task["goal"][:80]
 
-            # 嘗試讀取結構化 handoff manifest
+            section = [f"\n### ✅ {dep_id} — {goal_short}"]
+
             manifest = _read_handoff_manifest(dep_id)
 
-            section = [f"\n### ✅ {dep_id}"]
-
+            # ── Push 區：直接注入 prompt（source code 裡讀不到的設計脈絡）──
             if manifest:
-                # 有結構化 manifest — 最佳路徑
-                if manifest.get("created_files"):
-                    section.append(f"**建立的檔案（你必須 Read 這些檔案再動手）:**")
-                    for f in manifest["created_files"]:
-                        section.append(f"  - `{f}`")
-                if manifest.get("interfaces"):
-                    section.append(f"**Public Interfaces:**")
-                    for iface in manifest["interfaces"][:10]:
-                        section.append(f"  - `{iface}`")
                 if manifest.get("decisions"):
-                    section.append(f"**關鍵決策:**")
+                    section.append("**關鍵決策:**")
                     for d in manifest["decisions"][:5]:
                         section.append(f"  - {d}")
                 if manifest.get("notes"):
                     section.append(f"**給下游的備註:** {manifest['notes']}")
-                # 累積式祖先決策：帶上整條鏈的關鍵決策
                 if manifest.get("ancestor_decisions"):
-                    section.append(f"**祖先決策（影響整個專案）:**")
+                    section.append("**祖先決策（影響整個專案）:**")
                     for ad in manifest["ancestor_decisions"][:10]:
-                        section.append(f"  - {ad[:100]}")
-            else:
-                # 沒有 manifest — fallback 到 touches + 簡要 goal
-                if touches:
-                    section.append(f"**修改的檔案（你必須 Read 這些檔案再動手）:**")
-                    for f in touches:
-                        section.append(f"  - `{f}`")
-                else:
-                    goal_short = dep_task["goal"][:150]
-                    section.append(f"**任務目標:** {goal_short}...")
+                        section.append(f"  - {ad[:120]}")
 
-            block = "\n".join(section)
-            total_chars += len(block)
-            lines.append(block)
+            # ── Pull 區：只給路徑，agent 自己 Read（零損耗）──
+            handoff_path = get_handoff_path(dep_id)
+            if handoff_path.exists():
+                section.append(f"**Handoff manifest（Read 此檔案取得完整介面清單）:** `{handoff_path}`")
+
+            source_files = []
+            if manifest and manifest.get("created_files"):
+                source_files = manifest["created_files"]
+            elif touches:
+                source_files = touches
+
+            if source_files:
+                section.append("**原始碼檔案（必須 Read 再動手）:**")
+                for f in source_files:
+                    section.append(f"  - `{f}`")
+
+            lines.append("\n".join(section))
 
         return "\n".join(lines) if lines else ""
     finally:
@@ -197,11 +211,19 @@ def _read_handoff_manifest(task_id: str) -> dict:
     1. DB runs 表的 claude_output 中（如果 agent 輸出了 JSON manifest）
     2. 磁碟上的 /tmp/handoff-{task_id}.json
     """
-    # 優先讀磁碟上的 manifest
-    manifest_path = Path(f"/tmp/handoff-{task_id}.json")
-    if manifest_path.exists():
+    # 優先讀 project dir 下的 manifest
+    handoff_path = get_handoff_path(task_id)
+    if handoff_path.exists():
         try:
-            return json.loads(manifest_path.read_text(encoding="utf-8"))
+            return json.loads(handoff_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 向後相容：讀舊的 /tmp 路徑
+    legacy_path = Path(f"/tmp/handoff-{task_id}.json")
+    if legacy_path.exists():
+        try:
+            return json.loads(legacy_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -563,65 +585,91 @@ def write_run(
     worker_id: int = 0,
     attempt: int = 1,
     status: str = "running",
+    prompt_text: str = None,
 ) -> int:
     """Insert a new run record.
 
     Returns the row id of the inserted run.
+    prompt_text: 實際送出給 Claude 的完整 prompt（可追溯性用）。
     """
     conn = get_connection()
     try:
         now = datetime.utcnow().isoformat()
         prompt_hash = hashlib.sha256(claude_output.encode()).hexdigest()[:16]
         fingerprint = compute_output_fingerprint(claude_output)
+        input_hash = (
+            hashlib.sha256(prompt_text.encode()).hexdigest()[:32]
+            if prompt_text else None
+        )
 
         finished = now if status in ("pass", "fail", "error") else None
 
+        # 三層降級：完整（004+003） → 有 fingerprint（003） → 基本
+        base_cols = (task_id, worker_id, attempt, status, prompt_hash,
+                     claude_output, verify_output, error_class, duration,
+                     now, finished)
         try:
+            # 完整版：004 migration（prompt_text + input_prompt_hash）
             cur = conn.execute(
                 """INSERT INTO runs
                    (task_id, worker_id, attempt, status, prompt_hash,
                     claude_output, verify_output, error_class, duration_sec,
-                    started_at, finished_at, output_fingerprint)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    task_id,
-                    worker_id,
-                    attempt,
-                    status,
-                    prompt_hash,
-                    claude_output,
-                    verify_output,
-                    error_class,
-                    duration,
-                    now,
-                    finished,
-                    fingerprint,
-                ),
+                    started_at, finished_at, output_fingerprint,
+                    prompt_text, input_prompt_hash)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                base_cols + (fingerprint, prompt_text, input_hash),
             )
         except sqlite3.OperationalError:
-            # migration 尚未跑：降級到不存 fingerprint
-            cur = conn.execute(
-                """INSERT INTO runs
-                   (task_id, worker_id, attempt, status, prompt_hash,
-                    claude_output, verify_output, error_class, duration_sec,
-                    started_at, finished_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    task_id,
-                    worker_id,
-                    attempt,
-                    status,
-                    prompt_hash,
-                    claude_output,
-                    verify_output,
-                    error_class,
-                    duration,
-                    now,
-                    finished,
-                ),
-            )
+            try:
+                # 有 fingerprint 但沒 prompt_text（只有 003）
+                cur = conn.execute(
+                    """INSERT INTO runs
+                       (task_id, worker_id, attempt, status, prompt_hash,
+                        claude_output, verify_output, error_class, duration_sec,
+                        started_at, finished_at, output_fingerprint)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    base_cols + (fingerprint,),
+                )
+            except sqlite3.OperationalError:
+                # 基本版（只有原始 schema）
+                cur = conn.execute(
+                    """INSERT INTO runs
+                       (task_id, worker_id, attempt, status, prompt_hash,
+                        claude_output, verify_output, error_class, duration_sec,
+                        started_at, finished_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    base_cols,
+                )
         conn.commit()
         return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def write_audit_log(
+    task_id: str,
+    event_type: str,
+    event_data: dict,
+    actor: str = "orchestrator",
+):
+    """寫入審計日誌，記錄系統級決策。
+
+    event_type: healer_decision / role_switch / evaluator_verdict /
+                alignment_correction / spawn_research / looping_detected
+    event_data: 決策的完整 JSON 內容。
+    actor: 觸發者（orchestrator / watchdog / healer / evaluator）。
+    """
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO audit_log (task_id, event_type, event_data, actor)
+               VALUES (?, ?, ?, ?)""",
+            (task_id, event_type, json.dumps(event_data, ensure_ascii=False), actor),
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        # audit_log 表不存在（migration 未跑），靜默跳過
+        pass
     finally:
         conn.close()
 
@@ -671,6 +719,18 @@ def main():
     write_p.add_argument("--worker-id", type=int, default=0)
     write_p.add_argument("--attempt", type=int, default=1)
     write_p.add_argument("--status", default="running")
+    write_p.add_argument("--prompt-file", default=None,
+                         help="File containing the prompt sent to Claude")
+
+    # audit
+    audit_p = sub.add_parser("audit", help="Write an audit log entry")
+    audit_p.add_argument("task_id", help="Task ID")
+    audit_p.add_argument("--event-type", required=True,
+                         help="Event type (healer_decision, role_switch, etc.)")
+    audit_p.add_argument("--event-data", required=True,
+                         help="JSON string of event data")
+    audit_p.add_argument("--actor", default="orchestrator",
+                         help="Who triggered this event")
 
     args = parser.parse_args()
 
@@ -702,12 +762,12 @@ def main():
             if ancestor_decisions:
                 manifest["ancestor_decisions"] = ancestor_decisions
 
-            manifest_path = Path(f"/tmp/handoff-{args.task_id}.json")
-            manifest_path.write_text(
+            handoff_path = get_handoff_path(args.task_id)
+            handoff_path.write_text(
                 json.dumps(manifest, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-            print(f"Handoff manifest saved to {manifest_path}")
+            print(f"Handoff manifest saved to {handoff_path}")
         else:
             print(f"No manifest extracted for {args.task_id} (output will be parsed on-demand)")
 
@@ -740,6 +800,12 @@ def main():
             sys.exit(1)
         claude_output = output_path.read_text(encoding="utf-8")
 
+        prompt_content = None
+        if args.prompt_file:
+            prompt_path = Path(args.prompt_file)
+            if prompt_path.exists():
+                prompt_content = prompt_path.read_text(encoding="utf-8")
+
         run_id = write_run(
             task_id=args.task_id,
             claude_output=claude_output,
@@ -749,8 +815,22 @@ def main():
             worker_id=args.worker_id,
             attempt=args.attempt,
             status=args.status,
+            prompt_text=prompt_content,
         )
         print(f"Recorded run {run_id} for task {args.task_id}")
+
+    elif args.command == "audit":
+        try:
+            event_data = json.loads(args.event_data)
+        except json.JSONDecodeError:
+            event_data = {"raw": args.event_data}
+        write_audit_log(
+            task_id=args.task_id,
+            event_type=args.event_type,
+            event_data=event_data,
+            actor=args.actor,
+        )
+        print(f"Audit logged: {args.event_type} for {args.task_id}")
 
 
 if __name__ == "__main__":

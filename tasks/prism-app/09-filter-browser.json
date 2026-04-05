@@ -1,0 +1,10 @@
+{
+  "id": "filter-browser",
+  "project": "prism-app",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "建立濾鏡瀏覽器——用戶選擇照片後的濾鏡挑選介面。\n\n## 檔案\n\n### Prism/Presentation/Filters/FilterBrowserViewModel.swift\n\n```swift\n@Observable\nclass FilterBrowserViewModel {\n    var originalImageData: Data\n    var selectedFilter: FilterPreset?\n    var filterIntensity: Double = 1.0\n    var processedImageData: Data?\n    var filterThumbnails: [(FilterPreset, UIImage)] = []\n    var selectedCategory: FilterCategory?\n    var isProcessing = false\n    var favorites: Set<String> = []  // filter IDs\n    \n    // 載入所有濾鏡的縮圖預覽（背景生成）\n    func loadFilterPreviews() async { ... }\n    \n    // 套用選中的濾鏡\n    func applySelectedFilter() async { ... }\n    \n    // 切換最愛\n    func toggleFavorite(_ preset: FilterPreset) { ... }\n}\n```\n\n### Prism/Presentation/Filters/FilterBrowserView.swift\n\nVSCO 風格的濾鏡選擇介面：\n\n1. **頂部**：照片大圖預覽（即時顯示選中的濾鏡效果）\n2. **底部**：\n   - 分類標籤列（All / Classic / Modern / Portrait / BW / Favorites）\n   - 水平捲動的濾鏡縮圖列表\n   - 每個縮圖：小方形預覽 + 濾鏡名稱（如 \"A1\", \"C1\"）\n   - 選中的濾鏡有白色邊框\n3. **中間**：\n   - 濾鏡強度 slider（0% ~ 100%）\n   - 左右滑動切換濾鏡\n\n### Prism/Presentation/Filters/FilterThumbnailView.swift\n\n單個濾鏡縮圖 View：\n- 正方形裁切的預覽圖\n- 底部標籤（濾鏡名稱）\n- 選中時白色邊框\n- 最愛時有小愛心圖標\n\n### Prism/Presentation/Filters/FilterCategoryTabView.swift\n\n分類標籤的水平捲動列。\n\n## UI 設計\n\n- 暗色背景\n- 縮圖大小：80x80\n- 縮圖間距：8pt\n- 選中的縮圖有 2pt 白色邊框\n- 濾鏡名稱：12pt 白色\n- 分類標籤：capsule 樣式，選中時白色背景黑色文字\n\n## 前後對比\n\n- 長按預覽圖顯示原圖（before/after 對比）\n- 鬆開恢復濾鏡效果\n\n重要：\n- 先讀取 FilterPresetProvider 和 ImageProcessingService\n- 縮圖生成要在背景，避免卡 UI\n- 使用 AsyncImage 風格的載入機制\n- 專案必須 build 成功",
+  "touches": ["Prism/Presentation/Filters/FilterBrowserViewModel.swift", "Prism/Presentation/Filters/FilterBrowserView.swift", "Prism/Presentation/Filters/FilterThumbnailView.swift", "Prism/Presentation/Filters/FilterCategoryTabView.swift"],
+  "verify": "xcodebuild -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && echo 'PASS'",
+  "depends_on": ["filter-presets-classic", "domain-layer"],
+  "max_attempts": 5
+}

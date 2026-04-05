@@ -1,0 +1,10 @@
+{
+  "id": "photo-library",
+  "project": "prism-app",
+  "project_dir": "/Users/muhengli/dev/Prism",
+  "goal": "建立 Prism 的照片庫服務——Data 層的 PhotoLibraryRepository 實作。\n\n## 檔案：Prism/Data/Services/PhotoLibraryService.swift\n\n使用 PhotosUI 和 Photos framework。\n\n### 功能\n\n1. **requestAccess** — 請求相簿存取權限\n2. **fetchPhotos** — 使用 PHAsset 從相簿載入照片列表\n3. **loadImageData** — 使用 PHImageManager 載入完整解析度圖片\n4. **loadThumbnail** — 載入縮圖（用於 grid 預覽）\n5. **savePhoto** — 使用 PHPhotoLibrary 儲存處理後的照片\n6. **PHPicker 整合** — 提供 PHPickerConfiguration 給 SwiftUI 使用\n\n## 檔案：Prism/Data/Repositories/PhotoLibraryRepositoryImpl.swift\n\n## 檔案：Prism/Presentation/Gallery/PhotoPickerView.swift\n\nSwiftUI 的 PHPicker wrapper：\n```swift\nimport PhotosUI\nimport SwiftUI\n\nstruct PhotoPickerView: UIViewControllerRepresentable {\n    @Binding var selectedImageData: Data?\n    var onDismiss: () -> Void\n    \n    func makeUIViewController(context: Context) -> PHPickerViewController {\n        var config = PHPickerConfiguration()\n        config.filter = .images\n        config.selectionLimit = 1\n        let picker = PHPickerViewController(configuration: config)\n        picker.delegate = context.coordinator\n        return picker\n    }\n    // ... Coordinator with didFinishPicking\n}\n```\n\n## 重要\n\n- 先讀取 Domain 層的 PhotoLibraryRepository protocol 和 Photo entity\n- 使用 async/await 風格的 PHImageManager 呼叫\n- 縮圖大小：200x200\n- 專案必須 build 成功",
+  "touches": ["Prism/Data/Services/PhotoLibraryService.swift", "Prism/Data/Repositories/PhotoLibraryRepositoryImpl.swift", "Prism/Presentation/Gallery/PhotoPickerView.swift"],
+  "verify": "xcodebuild -project Prism.xcodeproj -scheme Prism -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build 2>&1 | tail -3 | grep -q 'BUILD SUCCEEDED' && echo 'PASS'",
+  "depends_on": ["setup-project"],
+  "max_attempts": 5
+}
